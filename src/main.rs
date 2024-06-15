@@ -1,4 +1,4 @@
-use std::{collections::HashMap, vec};
+use std::{collections::HashMap, vec, io::{BufReader, BufRead}, fs::File};
 
 #[derive(Debug)]
 struct Vm {
@@ -27,7 +27,7 @@ impl Value {
     fn as_num(&self) -> i32 {
         match self {
             Self::Num(i) => *i,
-            _ => panic!("value is not a number..."),
+            _ => panic!("{self:?} is not a number..."),
         }
     }
 
@@ -54,6 +54,27 @@ fn puts(stack: &Vec<Value>) {
 }
 
 fn main() {
+    if let Some(f) = std::env::args().nth(1).and_then(|f| std::fs::File::open(f).ok()) {
+        parse_batch(BufReader::new(f));
+    } else {
+        parse_interactive();
+    }
+
+}
+
+/** `BufReader<File>` は `impl BufRead`になる */
+fn parse_batch(reader: impl BufRead) {
+    let mut vm = Vm::new();
+
+    for line in reader.lines().flatten() {
+        parse(line, &mut vm);
+    }
+    // if let Ok(_) = reader.read_line(&mut buf) {
+    //     parse(buf.clone(), &mut vm);
+    // }
+}
+
+fn parse_interactive() {
     let mut vm = Vm::new();
     for line in std::io::stdin().lines().flatten() {
         parse(line.clone(), &mut vm);
@@ -215,6 +236,8 @@ impl_op!(lt, <);
 
 #[cfg(test)]
 mod test {
+    use std::io::Cursor;
+
     use super::*;
 
     #[test]
@@ -284,5 +307,21 @@ mod test {
             &mut vm,
         );
         assert_eq!(vm.stack, vec![Value::Num(30)]);
+    }
+
+    #[test]
+    fn test_parse_with_sometimes() {
+        let mut vm = Vm::new();
+        parse(
+            "/x 10 def /y 20 def x y +".into(),
+            &mut vm,
+        );
+        dbg!(&vm.stack);
+        parse(
+            "15 2 * -".into(),
+            &mut vm,
+        );
+
+        assert_eq!(vm.stack, vec![Value::Num(0)]);
     }
 }
