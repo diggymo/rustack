@@ -1,52 +1,48 @@
 use std::{collections::HashMap, vec};
 
 #[derive(Debug)]
-struct Vm<'src> {
-    stack: Vec<Value<'src>>,
-    vars: HashMap<&'src str, Value<'src>>
+struct Vm {
+    stack: Vec<Value>,
+    vars: HashMap<String, Value>,
 }
 
-impl<'src> Vm<'src> {
+impl Vm {
     pub fn new() -> Self {
         Self {
             stack: vec![],
-            vars: HashMap::new()
+            vars: HashMap::new(),
         }
     }
 }
 
-
 #[derive(Debug, PartialEq, Eq, Clone)]
-enum Value<'src> {
+enum Value {
     Num(i32),
-    Op(&'src str),
-    Block(Vec<Value<'src>>),
-    Sym(&'src str)
+    Op(String),
+    Block(Vec<Value>),
+    Sym(String),
 }
 
-
-impl<'src> Value<'src> {
+impl Value {
     fn as_num(&self) -> i32 {
         match self {
             Self::Num(i) => *i,
-            _ => panic!("value is not a number...")
+            _ => panic!("value is not a number..."),
         }
     }
 
-    fn to_block(self) -> Vec<Value<'src>> {
+    fn to_block(self) -> Vec<Value> {
         match self {
             Self::Block(val) => val,
-            _ => panic!("###")
+            _ => panic!("###"),
         }
     }
 }
 
 fn main() {
-    for line in std::io::stdin().lines() {
-        if line.is_err() {
-            panic!("what happened!");
-        }
-        parse(&line.unwrap());
+    let mut vm = Vm::new();
+    for line in std::io::stdin().lines().flatten() {
+        parse(line.clone(), &mut vm);
     }
 }
 
@@ -63,7 +59,7 @@ fn op_if(vm: &mut Vm) {
 
     dbg!(&vm.stack);
     let result = vm.stack.pop().unwrap().as_num();
-    if result!=0 {
+    if result != 0 {
         for val in true_block.to_block() {
             eval(val, vm);
         }
@@ -74,9 +70,9 @@ fn op_if(vm: &mut Vm) {
     }
 }
 
-fn eval<'src>(code: Value<'src>, vm: &mut Vm<'src>) {
+fn eval(code: Value, vm: &mut Vm) {
     match code {
-        Value::Op(op) => match op {
+        Value::Op(op) => match op.as_str() {
             "+" => add(&mut vm.stack),
             "-" => sub(&mut vm.stack),
             "*" => mul(&mut vm.stack),
@@ -85,41 +81,43 @@ fn eval<'src>(code: Value<'src>, vm: &mut Vm<'src>) {
                 dbg!(&vm.stack);
                 lt(&mut vm.stack);
                 dbg!(&vm.stack);
-            },
+            }
             "if" => op_if(vm),
             "def" => opt_def(vm),
             _ => {
                 dbg!(&vm.vars);
-                let val = vm.vars.get(op).expect(&format!("{op:?} is not defined"));
+                let val = vm
+                    .vars
+                    .get(op.as_str())
+                    .expect(&format!("{op:?} is not defined"));
                 vm.stack.push(val.clone());
             }
         },
-        _ => vm.stack.push(code.clone())
+        _ => vm.stack.push(code.clone()),
     };
 }
 
 /** FIXME: evalと共通化したい...が、独自のstackを持つ必要があるのでできない... */
-fn eval_in_block<'src>(code: Value<'src>, stack: &mut Vec<Value<'src>>, vars: &mut HashMap<&str, Value<'src>>) {
+fn eval_in_block(code: Value, stack: &mut Vec<Value>, vars: &mut HashMap<String, Value>) {
     match code {
-        Value::Op(op) => match op {
+        Value::Op(op) => match op.as_str() {
             "+" => add(stack),
             "-" => sub(stack),
             "*" => mul(stack),
             "/" => div(stack),
             "<" => lt(stack),
             _ => {
-                let val = vars.get(op).expect(&format!("{op:?} is not defined"));
+                let val = vars
+                    .get(op.as_str())
+                    .expect(&format!("{op:?} is not defined"));
                 stack.push(val.clone());
             }
         },
-        _ => stack.push(code.clone())
+        _ => stack.push(code.clone()),
     };
 }
 
-
-fn parse<'a>(line: &'a str) -> Vec<Value<'a>>{
-    let mut vm = Vm::new();
-
+fn parse(line: String, vm: &mut Vm) {
     let input: Vec<_> = line.split(" ").collect();
     // NOTE: Vec<&str> → &[&str]への変換
     let mut words = &input[..];
@@ -128,32 +126,30 @@ fn parse<'a>(line: &'a str) -> Vec<Value<'a>>{
         if word.is_empty() {
             continue;
         }
-        
+
         if word == "{" {
             let value;
-            (value, rest) = parse_block(rest, &mut vm);
+            (value, rest) = parse_block(rest, vm);
             vm.stack.push(value);
         } else {
             let code = if let Ok(num) = word.parse::<i32>() {
                 Value::Num(num)
             } else if word.starts_with("/") {
-                Value::Sym(&word[1..])
+                Value::Sym(word[1..].to_string())
             } else {
-                Value::Op(word)
+                Value::Op(word.into())
             };
-            eval(code, &mut vm);
+            eval(code, vm);
         }
 
         words = rest;
     }
-
-    return vm.stack;
 }
 
-fn parse_block<'src, 'a>(input: &'a [&'src str],vm: &mut Vm<'src>) -> (Value<'src>, &'a [&'src str]) {
+fn parse_block<'src, 'a>(input: &'a [&'src str], vm: &mut Vm) -> (Value, &'a [&'src str]) {
     let mut tokens = vec![];
     let mut words = input;
-    
+
     while let Some((&word, mut rest)) = words.split_first() {
         if word.is_empty() {
             break;
@@ -163,18 +159,18 @@ fn parse_block<'src, 'a>(input: &'a [&'src str],vm: &mut Vm<'src>) -> (Value<'sr
             let value;
             (value, rest) = parse_block(rest, vm);
             dbg!(&value, &rest, &tokens);
-            
+
             tokens.push(value);
         } else if word == "}" {
             return (Value::Block(tokens), rest);
-        } 
+        }
 
         let code = if let Ok(num) = word.parse::<i32>() {
             Value::Num(num)
         } else {
-            Value::Op(word)
+            Value::Op(word.into())
         };
-        
+
         eval_in_block(code, &mut tokens, &mut vm.vars);
 
         words = rest;
@@ -191,7 +187,6 @@ fn opt_def(vm: &mut Vm) {
         vm.vars.insert(sym, right_hand);
     }
 }
-
 
 macro_rules! impl_op {
     ($name:ident, $op:tt) => {
@@ -213,70 +208,61 @@ impl_op!(lt, <);
 mod test {
     use super::*;
 
-
     #[test]
     fn test_blck() {
         let result = parse_block(&["1", "2", "+", "}", "2"], &mut Vm::new());
-        assert_eq!(
-            result.0,
-            Value::Block(vec![Value::Num(3)])
-        );
-        assert_eq!(
-            result.1,
-            &["2"]
-        );
+        assert_eq!(result.0, Value::Block(vec![Value::Num(3)]));
+        assert_eq!(result.1, &["2"]);
     }
-
 
     #[test]
     fn test_sub() {
-        assert_eq!(
-            parse("2 2 -"), 
-            vec![Value::Num(0)]
-        );
+        let mut vm = Vm::new();
+        parse("2 2 -".into(), &mut vm);
+        assert_eq!(vm.stack, vec![Value::Num(0)]);
     }
-
 
     #[test]
     fn test_group() {
+        let mut vm = Vm::new();
+        parse("1 2 + { 3 4 }".into(), &mut vm);
         assert_eq!(
-            parse("1 2 + { 3 4 }"), 
-            vec![Value::Num(3), Value::Block(vec![Value::Num(3), Value::Num(4)])]
+            vm.stack,
+            vec![
+                Value::Num(3),
+                Value::Block(vec![Value::Num(3), Value::Num(4)])
+            ]
         );
     }
 
-
-    
     #[test]
     fn test_if_true() {
-        assert_eq!(
-            parse("{ 2 2 - } { 5 2 + } { 3 3 * } if"), 
-            vec![Value::Num(9)]
-        );
+        let mut vm = Vm::new();
+        parse("{ 2 2 - } { 5 2 + } { 3 3 * } if".into(), &mut vm);
+        assert_eq!(vm.stack, vec![Value::Num(9)]);
     }
 
     #[test]
     fn test_if_false() {
-        assert_eq!(
-            parse("{ 3 2 - } { 5 2 + } { 3 3 * } if"), 
-            vec![Value::Num(7)]
-        );
+        let mut vm = Vm::new();
+        parse("{ 3 2 - } { 5 2 + } { 3 3 * } if".into(), &mut vm);
+        assert_eq!(vm.stack, vec![Value::Num(7)]);
     }
 
     #[test]
     fn test_variables_add() {
-        assert_eq!(
-            parse("/x 10 def /y 20 def y x +"), 
-            vec![Value::Num(30)]
-        );
+        let mut vm = Vm::new();
+        parse("/x 10 def /y 20 def y x +".into(), &mut vm);
+        assert_eq!(vm.stack, vec![Value::Num(30)]);
     }
 
     #[test]
     fn test_variables_if() {
-        assert_eq!(
-            parse("/x 10 def /y 20 def { x y < } { x } { y } if"), 
-            vec![Value::Num(10)]
+        let mut vm = Vm::new();
+        parse(
+            "/x 10 def /y 20 def { x y < } { x } { y } if".into(),
+            &mut vm,
         );
+        assert_eq!(vm.stack, vec![Value::Num(10)]);
     }
-
 }
