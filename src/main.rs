@@ -1,52 +1,122 @@
-fn main() {
+use std::error::Error;
 
-    let mut stack: Vec<i32> = vec!();
+#[derive(Debug, PartialEq, Eq)]
+enum Value<'src> {
+    Num(i32),
+    Op(&'src str),
+    Block(Vec<Value<'src>>)
+}
 
-    for line in std::io::stdin().lines() {
-        if let Ok(_line) = line {
-            let words = _line.split(" ").collect::<Vec<&str>>();
-            // println!("Line: {words:?}. line: {_line}");
 
-            for word in words {
-                if let Ok(word) = word.parse::<i32>() {
-                    stack.push(word)
-                } else {
-                    match word {
-                        "+" => add(&mut stack),
-                        "-" => sub(&mut stack),
-                        "*" => mul(&mut stack),
-                        "/" => div(&mut stack),
-                        _ => panic!("{word} is aaaa")
-                    }
-                }
-            }
+impl<'src> Value<'src> {
+    fn as_num(&self) -> i32 {
+        match self {
+            Self::Num(i) => *i,
+            _ => panic!("value is not a number...")
         }
-
-        println!("Stack is {stack:?}");
     }
 }
 
+fn main() {
 
-fn add(stack: &mut Vec<i32>) {
-    let left_hand = stack.pop().unwrap();
-    let right_hand = stack.pop().unwrap();
-    stack.push(left_hand+right_hand);
+    // for line in std::io::stdin().lines() {
+    //     parse(line);
+    // }
 }
 
-fn sub(stack: &mut Vec<i32>) {
-    let right_hand = stack.pop().unwrap();
-    let left_hand = stack.pop().unwrap();
-    stack.push(left_hand-right_hand);
+fn parse<'a>(line: Result<&'a str, std::io::Error>) -> Vec<Value<'a>>{
+    let mut stack: Vec<Value> = vec!();
+
+    if let Ok(_line) = line {
+        let mut words: Vec<_> = _line.split(" ").collect();
+
+        while let Some((&word, mut rest)) = words.split_first() {
+            if word == "{" {
+                let value;
+                (value, rest) = parse_block(rest);
+                stack.push(value);
+            } else if let Ok(num) = word.parse::<i32>() {
+                stack.push(Value::Num(num));
+            } else {
+                match word {
+                    "+" => add(&mut stack),
+                    "-" => sub(&mut stack),
+                    "*" => mul(&mut stack),
+                    "/" => div(&mut stack),
+                    _ => panic!("{word} is aaaa")
+                }
+            }
+
+            words = rest.to_vec();
+        }
+    }
+
+    return stack;
 }
 
-fn mul(stack: &mut Vec<i32>) {
-    let left_hand = stack.pop().unwrap();
-    let right_hand = stack.pop().unwrap();
-    stack.push(right_hand*left_hand);
+
+
+fn parse_block<'src, 'a>(input: &'a [&'src str]) -> (Value<'src>, &'a [&'src str]) {
+    let mut tokens = vec![];
+    let mut words = input;
+    
+    while let Some((&word, mut rest)) = words.split_first() {
+        if word.is_empty() {
+            break;
+        }
+
+        if word == "{" {
+            let value;
+            (value, rest) = parse_block(rest);
+            tokens.push(value);
+        } else if word == "}" {
+            return (Value::Block(tokens), rest);
+        } else if let Ok(num) = word.parse::<i32>() {
+            tokens.push(Value::Num(num));
+        } else {
+            tokens.push(Value::Op(word));
+        }
+
+        words = rest;
+    }
+
+    (Value::Block(tokens), words)
 }
 
-fn div(stack: &mut Vec<i32>) {
-    let right_hand = stack.pop().unwrap();
-    let left_hand = stack.pop().unwrap();
-    stack.push(left_hand/right_hand);
+fn add(stack: &mut Vec<Value>) {
+    let left_hand = stack.pop().unwrap().as_num();
+    let right_hand = stack.pop().unwrap().as_num();
+    stack.push(Value::Num(left_hand+right_hand));
+}
+
+fn sub(stack: &mut Vec<Value>) {
+    let right_hand = stack.pop().unwrap().as_num();
+    let left_hand = stack.pop().unwrap().as_num();
+    stack.push(Value::Num(left_hand-right_hand));
+}
+
+fn mul(stack: &mut Vec<Value>) {
+    let left_hand = stack.pop().unwrap().as_num();
+    let right_hand = stack.pop().unwrap().as_num();
+    stack.push(Value::Num(right_hand*left_hand));
+}
+
+fn div(stack: &mut Vec<Value>) {
+    let right_hand = stack.pop().unwrap().as_num();
+    let left_hand = stack.pop().unwrap().as_num();
+    stack.push(Value::Num(left_hand/right_hand));
+}
+
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_group() {
+        assert_eq!(parse(
+            Ok("1 2 + { 3 4 }".into())), 
+            vec![Value::Num(3), Value::Block(vec![Value::Num(3), Value::Num(4)])]
+        );
+    }
 }
