@@ -18,37 +18,36 @@ impl<'src> Value<'src> {
 }
 
 fn main() {
-
-    // for line in std::io::stdin().lines() {
-    //     parse(line);
-    // }
+    for line in std::io::stdin().lines() {
+        if line.is_err() {
+            panic!("what happened!");
+        }
+        parse(&line.unwrap());
+    }
 }
 
-fn parse<'a>(line: Result<&'a str, std::io::Error>) -> Vec<Value<'a>>{
+fn parse<'a>(line: &'a str) -> Vec<Value<'a>>{
     let mut stack: Vec<Value> = vec!();
+    let mut words: Vec<_> = line.split(" ").collect();
 
-    if let Ok(_line) = line {
-        let mut words: Vec<_> = _line.split(" ").collect();
-
-        while let Some((&word, mut rest)) = words.split_first() {
-            if word == "{" {
-                let value;
-                (value, rest) = parse_block(rest);
-                stack.push(value);
-            } else if let Ok(num) = word.parse::<i32>() {
-                stack.push(Value::Num(num));
-            } else {
-                match word {
-                    "+" => add(&mut stack),
-                    "-" => sub(&mut stack),
-                    "*" => mul(&mut stack),
-                    "/" => div(&mut stack),
-                    _ => panic!("{word} is aaaa")
-                }
+    while let Some((&word, mut rest)) = words.split_first() {
+        if word == "{" {
+            let value;
+            (value, rest) = parse_block(rest);
+            stack.push(value);
+        } else if let Ok(num) = word.parse::<i32>() {
+            stack.push(Value::Num(num));
+        } else {
+            match word {
+                "+" => add(&mut stack),
+                "-" => sub(&mut stack),
+                "*" => mul(&mut stack),
+                "/" => div(&mut stack),
+                _ => panic!("{word} is aaaa")
             }
-
-            words = rest.to_vec();
         }
+
+        words = rest.to_vec();
     }
 
     return stack;
@@ -114,8 +113,8 @@ mod test {
 
     #[test]
     fn test_group() {
-        assert_eq!(parse(
-            Ok("1 2 + { 3 4 }".into())), 
+        assert_eq!(
+            parse("1 2 + { 3 4 }"), 
             vec![Value::Num(3), Value::Block(vec![Value::Num(3), Value::Num(4)])]
         );
     }
