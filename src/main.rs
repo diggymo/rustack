@@ -37,6 +37,20 @@ impl Value {
             _ => panic!("###"),
         }
     }
+
+    fn to_string(&self) -> String {
+        match self {
+            Self::Num(i) => i.to_string(),
+            Self::Op(v) | Self::Sym(v) => v.clone(),
+            Self::Block(_) => "<Block>".into()
+        }
+    }
+}
+
+fn puts(stack: &Vec<Value>) {
+    for v in stack {
+        println!("{}", v.to_string());
+    }
 }
 
 fn main() {
@@ -57,7 +71,6 @@ fn op_if(vm: &mut Vm) {
         eval(value, vm);
     }
 
-    dbg!(&vm.stack);
     let result = vm.stack.pop().unwrap().as_num();
     if result != 0 {
         for val in true_block.to_block() {
@@ -77,15 +90,11 @@ fn eval(code: Value, vm: &mut Vm) {
             "-" => sub(&mut vm.stack),
             "*" => mul(&mut vm.stack),
             "/" => div(&mut vm.stack),
-            "<" => {
-                dbg!(&vm.stack);
-                lt(&mut vm.stack);
-                dbg!(&vm.stack);
-            }
+            "<" => lt(&mut vm.stack),
             "if" => op_if(vm),
             "def" => opt_def(vm),
+            "puts" => puts(&vm.stack),
             _ => {
-                dbg!(&vm.vars);
                 let val = vm
                     .vars
                     .get(op.as_str())
@@ -106,6 +115,7 @@ fn eval_in_block(code: Value, stack: &mut Vec<Value>, vars: &mut HashMap<String,
             "*" => mul(stack),
             "/" => div(stack),
             "<" => lt(stack),
+            "puts" => puts(stack),
             _ => {
                 let val = vars
                     .get(op.as_str())
@@ -158,7 +168,6 @@ fn parse_block<'src, 'a>(input: &'a [&'src str], vm: &mut Vm) -> (Value, &'a [&'
         if word == "{" {
             let value;
             (value, rest) = parse_block(rest, vm);
-            dbg!(&value, &rest, &tokens);
 
             tokens.push(value);
         } else if word == "}" {
@@ -264,5 +273,16 @@ mod test {
             &mut vm,
         );
         assert_eq!(vm.stack, vec![Value::Num(10)]);
+    }
+
+
+    #[test]
+    fn test_puts() {
+        let mut vm = Vm::new();
+        parse(
+            "/x 10 def /y 20 def x y + puts".into(),
+            &mut vm,
+        );
+        assert_eq!(vm.stack, vec![Value::Num(30)]);
     }
 }
