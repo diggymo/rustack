@@ -9,9 +9,21 @@ struct Vm {
 
 impl Vm {
     pub fn new() -> Self {
+        let functions: [(&str, fn(&mut Vm)); 8] = [
+            ("+", add),
+            ("-", sub),
+            ("*", mul),
+            ("/", div),
+            ("<", lt),
+            ("if", op_if),
+            ("def", opt_def),
+            ("puts", puts)
+        ];
         Self {
             stack: vec![],
-            vars: HashMap::new(),
+            vars: functions.into_iter().map(|(name, fun)| {
+                (name.to_owned(), Value::Native(NativeOp(fun)))
+            }).collect(),
             blocks: vec![]
         }
     }
@@ -26,12 +38,30 @@ impl Vm {
     }
 }
 
+#[derive(Clone)]
+struct NativeOp(fn(&mut Vm) -> (),);
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum Value {
     Num(i32),
     Op(String),
     Sym(String),
-    Block(Vec<Value>)
+    Block(Vec<Value>),
+    Native(NativeOp)
+}
+
+impl PartialEq for NativeOp {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for NativeOp {}
+
+impl std::fmt::Debug for NativeOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<NativeOp>")
+    }
 }
 
 impl Value {
@@ -53,15 +83,15 @@ impl Value {
         match self {
             Self::Num(i) => i.to_string(),
             Self::Op(v) | Self::Sym(v) => v.clone(),
-            Self::Block(_) => "<Block>".into()
+            Self::Block(_) => "<Block>".into(),
+            Self::Native(_) => "<NativeFn>".into(),
         }
     }
 }
 
-fn puts(stack: &Vec<Value>) {
-    for v in stack {
-        println!("{}", v.to_string());
-    }
+fn puts(vm: &mut Vm) {
+    let value = vm.stack.last().unwrap();
+    println!("{}", value.to_string());
 }
 
 fn main() {
@@ -93,7 +123,6 @@ fn parse_batch(reader: impl BufRead) -> Vec<Value> {
 fn parse_interactive() {
     let mut vm = Vm::new();
     for line in std::io::stdin().lines().flatten() {
-        // parse(line.clone(), &mut vm);
         for word in line.split(" ") {
             parse_word(word, &mut vm);
         }
@@ -108,9 +137,6 @@ fn parse_word(word: &str, vm: &mut Vm) {
 
     if word == "{" {
         vm.blocks.push(vec![]);
-        // let value;
-        // (value, rest) = parse_block(rest, vm);
-        // vm.stack.push(value);
     } else if word == "}" {
         if let Some(last_block) = vm.blocks.pop() {
             eval(Value::Block(last_block), vm);
@@ -126,6 +152,7 @@ fn parse_word(word: &str, vm: &mut Vm) {
         } else {
             Value::Op(word.into())
         };
+        
         eval(code, vm);
     }
 }
@@ -157,31 +184,60 @@ fn op_if(vm: &mut Vm) {
 }
 
 fn eval(code: Value, vm: &mut Vm) {
-    match code {
-        Value::Op(op) => match op.as_str() {
-            "+" => add(vm),
-            "-" => sub(vm),
-            "*" => mul(vm),
-            "/" => div(vm),
-            "<" => lt(vm),
-            "if" => op_if(vm),
-            "def" => opt_def(vm),
-            "puts" => puts(&vm.stack),
-            _ => {
-                let val = vm
-                    .vars
-                    .get(op.as_str())
-                    .expect(&format!("{op:?} is not defined")).clone();
+    // NOTE: あとで計算するため、一旦保存するだけ。
+    if let Some(top_block) = vm.blocks.last_mut() {
+        top_block.push(code);
+        return;
+    }
+
+    if let Value::Op(ref op) = code {
+        let val = vm
+            .vars
+            .get(op.as_str())
+            .expect(&format!("{op:?} is not defined")).clone();
+        
+        match val {
+            // トップレベルで尚且つ変数の指定先がブロックの場合→関数実行
+            Value::Block(block) => {
+                vm.blocks.push(vec![]);
+                for v in block {
+                    eval(v, vm);
+                }
+            },
+            Value::Native(op) => op.0(vm),
+            _ => vm.stack.push(val)
+        }
+    } else{
+        vm.stack.push(code.clone());
+    }
+    //     let stack = vm.get_current_scope_stack();
+    //     stack.push(val);
+
+    // match code {
+    //     Value::Op(op) => match op.as_str() {
+    //         "+" => add(vm),
+    //         "-" => sub(vm),
+    //         "*" => mul(vm),
+    //         "/" => div(vm),
+    //         "<" => lt(vm),
+    //         "if" => op_if(vm),
+    //         "def" => opt_def(vm),
+    //         "puts" => puts(&vm.stack),
+    //         _ => {
+    //             let val = vm
+    //                 .vars
+    //                 .get(op.as_str())
+    //                 .expect(&format!("{op:?} is not defined")).clone();
                 
-                let stack = vm.get_current_scope_stack();
-                stack.push(val);
-            }
-        },
-        _ => {
-            let stack = vm.get_current_scope_stack();
-            stack.push(code.clone())
-        },
-    };
+    //             let stack = vm.get_current_scope_stack();
+    //             stack.push(val);
+    //         }
+    //     },
+    //     _ => {
+    //         let stack = vm.get_current_scope_stack();
+    //         stack.push(code.clone())
+    //     },
+    // };
 }
 
 fn opt_def(vm: &mut Vm) {
