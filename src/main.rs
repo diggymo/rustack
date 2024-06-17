@@ -198,10 +198,10 @@ fn eval(code: Value, vm: &mut Vm) {
             .get(op.as_str())
             .expect(&format!("{op:?} is not defined")).clone();
         
+        dbg!(&val);
         match val {
             // トップレベルで尚且つ変数の指定先がブロックの場合→関数実行
             Value::Block(block) => {
-                vm.blocks.push(vec![]);
                 for v in block {
                     eval(v, vm);
                 }
@@ -320,6 +320,13 @@ mod test {
     fn test_parse_with_sometimes() {
         let result = parse_batch(Cursor::new("/x 10 def /y 20 def x y +\n15 2 * -"));
         assert_eq!(result, vec![Value::Num(0)]);
+    }
+
+
+    #[test]
+    fn test_my_function() {
+        let result = parse_batch(Cursor::new("/double { 2 * } def 10 double"));
+        assert_eq!(result, vec![Value::Num(20)]);
     }
 
     #[test]
