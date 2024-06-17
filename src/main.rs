@@ -1,4 +1,4 @@
-use std::{collections::HashMap, vec, io::{BufReader, BufRead}, fs::File};
+use std::{collections::HashMap, vec, io::{BufReader, BufRead}};
 
 #[derive(Debug)]
 struct Vm {
@@ -9,7 +9,7 @@ struct Vm {
 
 impl Vm {
     pub fn new() -> Self {
-        let functions: [(&str, fn(&mut Vm)); 8] = [
+        let functions: [(&str, fn(&mut Vm)); 10] = [
             ("+", add),
             ("-", sub),
             ("*", mul),
@@ -17,7 +17,9 @@ impl Vm {
             ("<", lt),
             ("if", op_if),
             ("def", opt_def),
-            ("puts", puts)
+            ("puts", puts),
+            ("exch", exch),
+            ("dup", dup),
         ];
         Self {
             stack: vec![],
@@ -152,7 +154,7 @@ fn parse_word(word: &str, vm: &mut Vm) {
         } else {
             Value::Op(word.into())
         };
-        
+
         eval(code, vm);
     }
 }
@@ -210,34 +212,6 @@ fn eval(code: Value, vm: &mut Vm) {
     } else{
         vm.stack.push(code.clone());
     }
-    //     let stack = vm.get_current_scope_stack();
-    //     stack.push(val);
-
-    // match code {
-    //     Value::Op(op) => match op.as_str() {
-    //         "+" => add(vm),
-    //         "-" => sub(vm),
-    //         "*" => mul(vm),
-    //         "/" => div(vm),
-    //         "<" => lt(vm),
-    //         "if" => op_if(vm),
-    //         "def" => opt_def(vm),
-    //         "puts" => puts(&vm.stack),
-    //         _ => {
-    //             let val = vm
-    //                 .vars
-    //                 .get(op.as_str())
-    //                 .expect(&format!("{op:?} is not defined")).clone();
-                
-    //             let stack = vm.get_current_scope_stack();
-    //             stack.push(val);
-    //         }
-    //     },
-    //     _ => {
-    //         let stack = vm.get_current_scope_stack();
-    //         stack.push(code.clone())
-    //     },
-    // };
 }
 
 fn opt_def(vm: &mut Vm) {
@@ -267,6 +241,19 @@ impl_op!(sub, -);
 impl_op!(mul, *);
 impl_op!(div, /);
 impl_op!(lt, <);
+
+fn dup(vm: &mut Vm) {
+    let stack = vm.get_current_scope_stack();
+    stack.push(stack.last().unwrap().clone());
+} 
+
+fn exch(vm: &mut Vm) {
+    let stack = vm.get_current_scope_stack();
+    let last = stack.pop().unwrap();
+    let last_2 = stack.pop().unwrap();
+    stack.push(last);
+    stack.push(last_2);
+} 
 
 #[cfg(test)]
 mod test {
@@ -333,5 +320,18 @@ mod test {
     fn test_parse_with_sometimes() {
         let result = parse_batch(Cursor::new("/x 10 def /y 20 def x y +\n15 2 * -"));
         assert_eq!(result, vec![Value::Num(0)]);
+    }
+
+    #[test]
+    fn test_dup() {
+        let result = parse_batch(Cursor::new("10 5 dup"));
+        assert_eq!(result, vec![Value::Num(10), Value::Num(5), Value::Num(5)]);
+    }
+
+
+    #[test]
+    fn test_exch() {
+        let result = parse_batch(Cursor::new("10 5 exch"));
+        assert_eq!(result, vec![Value::Num(5), Value::Num(10)]);
     }
 }
