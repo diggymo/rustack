@@ -1,11 +1,15 @@
-use std::{collections::HashMap, vec, io::{BufReader, BufRead}};
+use std::{
+    collections::HashMap,
+    io::{BufRead, BufReader},
+    vec,
+};
 
 #[derive(Debug)]
 struct Vm {
     stack: Vec<Value>,
     /** Valueには `Num` もしくは `Block` が保存されている */
     vars: Vec<HashMap<String, Value>>,
-    blocks: Vec<Vec<Value>>
+    blocks: Vec<Vec<Value>>,
 }
 
 impl Vm {
@@ -24,29 +28,32 @@ impl Vm {
         ];
         Self {
             stack: vec![],
-            vars: vec![functions.into_iter().map(|(name, fun)| {
-                (name.to_owned(), Value::Native(NativeOp(fun)))
-            }).collect()],
-            blocks: vec![]
+            vars: vec![functions
+                .into_iter()
+                .map(|(name, fun)| (name.to_owned(), Value::Native(NativeOp(fun))))
+                .collect()],
+            blocks: vec![],
         }
     }
 
-    pub fn get_current_scope_stack(&mut self) -> &mut Vec<Value>{
+    pub fn get_current_scope_stack(&mut self) -> &mut Vec<Value> {
         return if self.blocks.len() == 0 {
             &mut self.stack
         } else {
             self.blocks.last_mut().unwrap()
         };
-    
     }
 
     fn find_var(&self, name: &str) -> Option<Value> {
-        self.vars.iter().rev().find_map(|var_map| var_map.get(name).map(|var| var.to_owned()))
+        self.vars
+            .iter()
+            .rev()
+            .find_map(|var_map| var_map.get(name).map(|var| var.to_owned()))
     }
 }
 
 #[derive(Clone)]
-struct NativeOp(fn(&mut Vm) -> (),);
+struct NativeOp(fn(&mut Vm) -> ());
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum Value {
@@ -58,7 +65,7 @@ enum Value {
     Sym(String),
     Block(Vec<Value>),
     // デフォルトで存在する命令
-    Native(NativeOp)
+    Native(NativeOp),
 }
 
 impl PartialEq for NativeOp {
@@ -106,12 +113,14 @@ fn puts(vm: &mut Vm) {
 }
 
 fn main() {
-    if let Some(f) = std::env::args().nth(1).and_then(|f| std::fs::File::open(f).ok()) {
+    if let Some(f) = std::env::args()
+        .nth(1)
+        .and_then(|f| std::fs::File::open(f).ok())
+    {
         parse_batch(BufReader::new(f));
     } else {
         parse_interactive();
     }
-
 }
 
 /** `BufReader<File>` は `impl BufRead`になる */
@@ -202,8 +211,11 @@ fn eval(code: Value, vm: &mut Vm) {
     }
 
     if let Value::Op(ref op) = code {
-        let val = vm.find_var(op.as_str()).expect(&format!("{op:?} is not defined")).clone();
-        
+        let val = vm
+            .find_var(op.as_str())
+            .expect(&format!("{op:?} is not defined"))
+            .clone();
+
         match val {
             // トップレベルで尚且つ変数の指定先がブロックの場合→関数実行
             Value::Block(block) => {
@@ -212,11 +224,11 @@ fn eval(code: Value, vm: &mut Vm) {
                     eval(v, vm);
                 }
                 vm.vars.pop();
-            },
+            }
             Value::Native(op) => op.0(vm),
-            _ => vm.stack.push(val)
+            _ => vm.stack.push(val),
         }
-    } else{
+    } else {
         vm.stack.push(code.clone());
     }
 }
@@ -252,7 +264,7 @@ impl_op!(lt, <);
 fn dup(vm: &mut Vm) {
     let stack = vm.get_current_scope_stack();
     stack.push(stack.last().unwrap().clone());
-} 
+}
 
 fn exch(vm: &mut Vm) {
     let stack = vm.get_current_scope_stack();
@@ -260,7 +272,7 @@ fn exch(vm: &mut Vm) {
     let last_2 = stack.pop().unwrap();
     stack.push(last);
     stack.push(last_2);
-} 
+}
 
 #[cfg(test)]
 mod test {
@@ -316,7 +328,6 @@ mod test {
         assert_eq!(result, vec![Value::Num(10)]);
     }
 
-
     #[test]
     fn test_puts() {
         let result = parse_batch(Cursor::new("/x 10 def /y 20 def x y + puts"));
@@ -328,7 +339,6 @@ mod test {
         let result = parse_batch(Cursor::new("/x 10 def /y 20 def x y +\n15 2 * -"));
         assert_eq!(result, vec![Value::Num(0)]);
     }
-
 
     #[test]
     fn test_my_function() {
@@ -342,7 +352,6 @@ mod test {
         assert_eq!(result, vec![Value::Num(10), Value::Num(5), Value::Num(5)]);
     }
 
-
     #[test]
     fn test_exch() {
         let result = parse_batch(Cursor::new("10 5 exch"));
@@ -354,7 +363,6 @@ mod test {
         let result = parse_batch(Cursor::new("/double { 2 * } def \n /square { dup * } def \n 10 double puts \n 10 square puts \n /vec2sqlen { square exch exch + } def \n 1 2 vec2sqlen puts"));
         assert_eq!(result, vec![Value::Num(20), Value::Num(100), Value::Num(5)]);
     }
-
 
     #[test]
     fn test_block_scope() {

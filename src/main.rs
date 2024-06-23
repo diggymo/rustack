@@ -15,7 +15,6 @@ fn source(mut input: &str) -> Vec<Token> {
         } else {
             break;
         }
-        
     }
 
     result
@@ -33,8 +32,6 @@ fn token(input: &str) -> (&str, Option<Token>) {
 
     (input, None)
 }
-
-
 
 fn whitespace(mut input: &str) -> &str {
     // input.chars()は新しいiteratorを生み出す。
@@ -116,20 +113,17 @@ mod test {
         assert_eq!(result.0, "");
     }
 
-
     #[test]
     fn test_source() {
         let result = source("123 world");
         assert_eq!(result, vec![Token::Number, Token::Ident]);
     }
 
-
     #[test]
     fn test_source_2() {
         let result = source("Hello world");
         assert_eq!(result, vec![Token::Ident, Token::Ident]);
     }
-
 
     #[test]
     fn test_source_3() {
@@ -145,4 +139,3 @@ mod test {
 }
 
 fn main() {}
-
