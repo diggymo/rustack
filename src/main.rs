@@ -1,6 +1,7 @@
 // fn recognizer(input: &str) -> &str;
 
-use std::{ops::Range, str::Chars};
+use core::panic;
+use std::{ops::Range, str::Chars, vec};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Token {
@@ -8,6 +9,16 @@ enum Token {
     Number,
     LParen,
     RParen,
+}
+
+/**
+ * ライフタイムは不要っぽい
+ * `LParen`および`RParen`は含まれていない
+ */
+#[derive(Debug, PartialEq)]
+enum TokenTree {
+    Token(Token),
+    Tree(Vec<TokenTree>),
 }
 
 /** 不要な気がする... */
@@ -21,18 +32,30 @@ fn peek_char(input: &str) -> Option<char> {
     input.chars().next()
 }
 
-fn source(mut input: &str) -> Vec<Token> {
-    let mut result = vec![];
+fn source(mut input: &str) -> (&str, TokenTree) {
+    let mut token_tree: Vec<TokenTree> = vec![];
     loop {
-        if let (new_input, Some(token_type)) = token(input) {
-            result.push(token_type);
-            input = new_input;
+        if let (rest_input, Some(token_type)) = token(input) {
+            match token_type {
+                Token::Ident | Token::Number => {
+                    token_tree.push(TokenTree::Token(token_type));
+                    input = rest_input;
+                }
+                Token::LParen => {
+                    let (rest_input_after_tree, tree) = source(rest_input);
+                    input = rest_input_after_tree;
+                    token_tree.push(tree);
+                }
+                Token::RParen => {
+                    return (rest_input, TokenTree::Tree(token_tree));
+                }
+            }
         } else {
             break;
         }
     }
 
-    result
+    return (input, TokenTree::Tree(token_tree));
 }
 
 fn token(input: &str) -> (&str, Option<Token>) {
@@ -145,25 +168,46 @@ mod test {
     #[test]
     fn test_source() {
         let result = source("123 world");
-        assert_eq!(result, vec![Token::Number, Token::Ident]);
+        assert_eq!(
+            result,
+            (
+                "",
+                TokenTree::Tree(vec![
+                    TokenTree::Token(Token::Number),
+                    TokenTree::Token(Token::Ident)
+                ])
+            )
+        );
     }
 
     #[test]
     fn test_source_2() {
         let result = source("Hello world");
-        assert_eq!(result, vec![Token::Ident, Token::Ident]);
+        assert_eq!(
+            result,
+            (
+                "",
+                TokenTree::Tree(vec![
+                    TokenTree::Token(Token::Ident),
+                    TokenTree::Token(Token::Ident)
+                ])
+            )
+        );
     }
 
     #[test]
     fn test_source_3() {
         let result = source("      world");
-        assert_eq!(result, vec![Token::Ident]);
+        assert_eq!(
+            result,
+            ("", TokenTree::Tree(vec![TokenTree::Token(Token::Ident)]))
+        );
     }
 
     #[test]
     fn test_source_empty() {
         let result = source("");
-        assert_eq!(result, vec![]);
+        assert_eq!(result, ("", TokenTree::Tree(vec![])));
     }
 
     #[test]
@@ -171,14 +215,36 @@ mod test {
         let result = source("() (())");
         assert_eq!(
             result,
-            vec![
-                Token::LParen,
-                Token::RParen,
-                Token::LParen,
-                Token::LParen,
-                Token::RParen,
-                Token::RParen,
-            ]
+            (
+                "",
+                TokenTree::Tree(vec![
+                    TokenTree::Tree(vec![]),
+                    TokenTree::Tree(vec![
+                        TokenTree::Tree(vec![])
+                    ])
+                ])
+            )
+        );
+    }
+
+
+    #[test]
+    fn test_source_paren_2() {
+        let result = source("((car cdr) cdr)");
+        assert_eq!(
+            result,
+            (
+                "",
+                TokenTree::Tree(vec![
+                    TokenTree::Tree(vec![
+                        TokenTree::Tree(vec![
+                            TokenTree::Token(Token::Ident),
+                            TokenTree::Token(Token::Ident),
+                        ]),
+                        TokenTree::Token(Token::Ident),
+                    ])
+                ])
+            )
         );
     }
 }
