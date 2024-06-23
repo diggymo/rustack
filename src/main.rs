@@ -3,7 +3,7 @@ use std::{collections::HashMap, vec, io::{BufReader, BufRead}};
 #[derive(Debug)]
 struct Vm {
     stack: Vec<Value>,
-    vars: HashMap<String, Value>,
+    vars: Vec<HashMap<String, Value>>,
     blocks: Vec<Vec<Value>>
 }
 
@@ -23,9 +23,9 @@ impl Vm {
         ];
         Self {
             stack: vec![],
-            vars: functions.into_iter().map(|(name, fun)| {
+            vars: vec![functions.into_iter().map(|(name, fun)| {
                 (name.to_owned(), Value::Native(NativeOp(fun)))
-            }).collect(),
+            }).collect()],
             blocks: vec![]
         }
     }
@@ -38,6 +38,10 @@ impl Vm {
         };
     
     }
+
+    fn find_var(&self, name: &str) -> Option<Value> {
+        self.vars.iter().rev().find_map(|var_map| var_map.get(name).map(|var| var.to_owned()))
+    }
 }
 
 #[derive(Clone)]
@@ -45,10 +49,14 @@ struct NativeOp(fn(&mut Vm) -> (),);
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum Value {
+    // 1, 5, 6
     Num(i32),
+    // 独自命令
     Op(String),
+    //  `/a`
     Sym(String),
     Block(Vec<Value>),
+    // デフォルトで存在する命令
     Native(NativeOp)
 }
 
@@ -186,6 +194,8 @@ fn op_if(vm: &mut Vm) {
 }
 
 fn eval(code: Value, vm: &mut Vm) {
+    println!("code: {:?}, stack: {:?}", code, vm.stack);
+
     // NOTE: あとで計算するため、一旦保存するだけ。
     if let Some(top_block) = vm.blocks.last_mut() {
         top_block.push(code);
@@ -193,18 +203,16 @@ fn eval(code: Value, vm: &mut Vm) {
     }
 
     if let Value::Op(ref op) = code {
-        let val = vm
-            .vars
-            .get(op.as_str())
-            .expect(&format!("{op:?} is not defined")).clone();
+        let val = vm.find_var(op.as_str()).expect(&format!("{op:?} is not defined")).clone();
         
-        dbg!(&val);
         match val {
             // トップレベルで尚且つ変数の指定先がブロックの場合→関数実行
             Value::Block(block) => {
+                vm.vars.push(HashMap::new());
                 for v in block {
                     eval(v, vm);
                 }
+                vm.vars.pop();
             },
             Value::Native(op) => op.0(vm),
             _ => vm.stack.push(val)
@@ -221,7 +229,7 @@ fn opt_def(vm: &mut Vm) {
     let left_hand = stack.pop().unwrap();
 
     if let Value::Sym(sym) = left_hand {
-        vm.vars.insert(sym, right_hand);
+        vm.vars.last_mut().unwrap().insert(sym, right_hand);
     }
 }
 
@@ -340,5 +348,11 @@ mod test {
     fn test_exch() {
         let result = parse_batch(Cursor::new("10 5 exch"));
         assert_eq!(result, vec![Value::Num(5), Value::Num(10)]);
+    }
+
+    #[test]
+    fn test_square_double() {
+        let result = parse_batch(Cursor::new("/double { 2 * } def \n /square { dup * } def \n 10 double puts \n 10 square puts \n /vec2sqlen { square exch exch + } def \n 1 2 vec2sqlen puts"));
+        assert_eq!(result, vec![Value::Num(20), Value::Num(100), Value::Num(5)]);
     }
 }
