@@ -3,6 +3,7 @@ use std::{collections::HashMap, vec, io::{BufReader, BufRead}};
 #[derive(Debug)]
 struct Vm {
     stack: Vec<Value>,
+    /** Valueには `Num` もしくは `Block` が保存されている */
     vars: Vec<HashMap<String, Value>>,
     blocks: Vec<Vec<Value>>
 }
@@ -49,11 +50,11 @@ struct NativeOp(fn(&mut Vm) -> (),);
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum Value {
-    // 1, 5, 6
+    // ex: 1, 5, 6
     Num(i32),
     // 独自命令
     Op(String),
-    //  `/a`
+    //  ex: `/a`
     Sym(String),
     Block(Vec<Value>),
     // デフォルトで存在する命令
@@ -125,9 +126,6 @@ fn parse_batch(reader: impl BufRead) -> Vec<Value> {
     }
 
     vm.stack
-    // if let Ok(_) = reader.read_line(&mut buf) {
-    //     parse(buf.clone(), &mut vm);
-    // }
 }
 
 fn parse_interactive() {
@@ -196,8 +194,9 @@ fn op_if(vm: &mut Vm) {
 fn eval(code: Value, vm: &mut Vm) {
     println!("code: {:?}, stack: {:?}", code, vm.stack);
 
-    // NOTE: あとで計算するため、一旦保存するだけ。
+    // ブロックが存在する場合→ブロックの中での評価である
     if let Some(top_block) = vm.blocks.last_mut() {
+        // NOTE: ブロックの中身は遅延評価させるため、ここでは評価せずスタックに保存して終了する。
         top_block.push(code);
         return;
     }
@@ -354,5 +353,18 @@ mod test {
     fn test_square_double() {
         let result = parse_batch(Cursor::new("/double { 2 * } def \n /square { dup * } def \n 10 double puts \n 10 square puts \n /vec2sqlen { square exch exch + } def \n 1 2 vec2sqlen puts"));
         assert_eq!(result, vec![Value::Num(20), Value::Num(100), Value::Num(5)]);
+    }
+
+
+    #[test]
+    fn test_block_scope() {
+        let result = parse_batch(Cursor::new("/a { 1 2 + } def a a"));
+        assert_eq!(result, vec![Value::Num(3), Value::Num(3)]);
+    }
+
+    #[test]
+    fn test_block_scope_2() {
+        let result = parse_batch(Cursor::new("/x { 2 5 + 10 * /a 20 def a - } def x"));
+        assert_eq!(result, vec![Value::Num(50)]);
     }
 }
