@@ -1,7 +1,7 @@
 // fn recognizer(input: &str) -> &str;
 
 use core::panic;
-use std::{ops::Range, str::Chars, vec};
+use std::{ops::Range, str::Chars, vec, error::Error};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Token {
@@ -26,6 +26,22 @@ enum Expression<'src> {
     Ident(&'src str),
     NumLiteral(f64),
     Add(Box<Expression<'src>>, Box<Expression<'src>>),
+}
+
+
+fn eval(expr: Expression) -> f64 {
+    match expr {
+        Expression::Ident("pi") => std::f64::consts::PI,
+        Expression::Ident(id) => panic!("Unknown name {:?}", id),
+        Expression::NumLiteral(n) => n,
+        Expression::Add(lhs, rhs) => eval(*lhs) + eval(*rhs)
+    }
+}
+
+fn ex_eval<'src>(
+    input: &'src str
+) -> Option<f64> {
+    expr(input).map(|(_,e)| eval(e))
 }
 
 /**
@@ -295,6 +311,24 @@ mod test {
                 )
             ))
         );
+    }
+
+
+    #[test]
+    fn test_eval_1() {
+        assert_eq!(ex_eval("123"), Some(123.));
+    }
+    #[test]
+    fn test_eval_2() {
+        assert_eq!(ex_eval("(123 + 456) + pi"), Some(582.1415926535898));
+    }
+    #[test]
+    fn test_eval_3() {
+        assert_eq!(ex_eval("10 + (100+1)"), Some(111.));
+    }
+    #[test]
+    fn test_eval_4() {
+        assert_eq!(ex_eval("((1+2)+(3+4))+5+6"), Some(21.));
     }
 }
 
