@@ -28,6 +28,7 @@ enum Expression<'src> {
     Sub(Box<Expression<'src>>, Box<Expression<'src>>),
     Mul(Box<Expression<'src>>, Box<Expression<'src>>),
     Div(Box<Expression<'src>>, Box<Expression<'src>>),
+    FnInvoke(&'src str, Vec<Expression<'src>>),
 }
 
 fn eval(expr: Expression) -> f64 {
@@ -39,6 +40,39 @@ fn eval(expr: Expression) -> f64 {
         Expression::Sub(lhs, rhs) => eval(*lhs) - eval(*rhs),
         Expression::Mul(lhs, rhs) => eval(*lhs) * eval(*rhs),
         Expression::Div(lhs, rhs) => eval(*lhs) / eval(*rhs),
+        Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args),
+        Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args),
+        Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args),
+        Expression::FnInvoke("tan", args) => unary_fn(f64::tan)(args),
+        Expression::FnInvoke("asin", args) => unary_fn(f64::asin)(args),
+        Expression::FnInvoke("acos", args) => unary_fn(f64::acos)(args),
+        Expression::FnInvoke("atan", args) => unary_fn(f64::atan)(args),
+        Expression::FnInvoke("atan2", args) => binary_fn(f64::atan2)(args),
+        Expression::FnInvoke("pow", args) => binary_fn(f64::powf)(args),
+        Expression::FnInvoke("exp", args) => unary_fn(f64::exp)(args),
+        Expression::FnInvoke("log", args) => binary_fn(f64::log)(args),
+        Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args),
+        Expression::FnInvoke(name, _) => {
+            panic!("Unknown function {name:?}")
+        }
+    }
+}
+
+fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
+    move |args| {
+        f(eval(
+            args.into_iter().next().expect("function missing argument"),
+        ))
+    }
+}
+
+fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
+    move |args| {
+        let mut iter = args.into_iter();
+
+        let lhs = eval(iter.next().unwrap());
+        let rhs = eval(iter.next().unwrap());
+        f(lhs, rhs)
     }
 }
 
@@ -51,10 +85,7 @@ fn ex_eval<'src>(input: &'src str) -> Result<f64, nom::Err<nom::error::Error<&'s
  * `((-1))` `+5` `3+2`
  */
 fn expr(input: &str) -> IResult<&str, Expression> {
-    dbg!("expr_start");
     let (i, init) = term(input)?;
-
-    dbg!("expr", &init);
 
     fold_many0(
         pair(space_delimited(alt((char('+'), char('-')))), term),
@@ -62,16 +93,13 @@ fn expr(input: &str) -> IResult<&str, Expression> {
         |acc, (op, val)| match op {
             '+' => Expression::Add(Box::new(acc), Box::new(val)),
             '-' => Expression::Sub(Box::new(acc), Box::new(val)),
-            _ => panic!("aaa")
+            _ => panic!("aaa"),
         },
     )(i)
 }
 
 fn term(input: &str) -> IResult<&str, Expression> {
-    dbg!("term_start");
     let (i, init) = factor(input)?;
-
-    dbg!("term", &init);
 
     fold_many0(
         pair(space_delimited(alt((char('*'), char('/')))), factor),
@@ -85,7 +113,7 @@ fn term(input: &str) -> IResult<&str, Expression> {
 }
 
 fn factor(i: &str) -> IResult<&str, Expression> {
-    alt((number, ident, paren))(i)
+    alt((func_call, number, ident, paren))(i)
 }
 fn paren(input: &str) -> IResult<&str, Expression> {
     space_delimited(delimited(tag("("), expr, tag(")")))(input)
@@ -96,22 +124,16 @@ fn number(mut input: &str) -> IResult<&str, Expression> {
         .map(|(i, a)| (i, Expression::NumLiteral(a.parse().unwrap())))
 }
 
-/** 自作したコンビネーターのシグネチャからnomのシグネチャに変換するwrapper */
-fn option2result(
-    f: impl Fn(&str) -> Option<(&str, Expression)>,
-) -> impl FnMut(&str) -> Result<(&str, Expression), nom::Err<nom::error::Error<&str>>> {
-    return move |i| {
-        let result = f(i);
-        result.ok_or(nom::Err::Incomplete(nom::Needed::Unknown))
-    };
+fn ident(mut input: &str) -> IResult<&str, Expression> {
+    space_delimited(identifier)(input)
+        .map(|(next_input, a)| return (next_input, Expression::Ident(a)))
 }
 
-fn ident(mut input: &str) -> IResult<&str, Expression> {
-    space_delimited(recognize(pair(
+fn identifier(input: &str) -> IResult<&str, &str> {
+    recognize(pair(
         alt((alpha1, tag("_"))),
         many0(alt((alphanumeric1, tag("_")))),
-    )))(input)
-    .map(|(next_input, a)| return (next_input, Expression::Ident(a)))
+    ))(input)
 }
 
 fn space_delimited<'src, O, E>(
@@ -121,6 +143,18 @@ where
     E: ParseError<&'src str>,
 {
     delimited(multispace0, f, multispace0)
+}
+
+fn func_call(input: &str) -> IResult<&str, Expression> {
+    let (input, ident_expression) = space_delimited(identifier)(input)?;
+
+    let (input, args) = delimited(
+        tag("("),
+        many0(delimited(multispace0, expr, space_delimited(opt(tag(","))))),
+        tag(")"),
+    )(input)?;
+
+    return Ok((input, Expression::FnInvoke(ident_expression, args)));
 }
 
 #[cfg(test)]
@@ -156,39 +190,6 @@ mod test {
         let result = ident("_h_oge");
         assert_eq!(result, Ok(("", Expression::Ident("_h_oge"))));
     }
-
-    // #[test]
-    // fn test_term() {
-    //     let result = term("(+5)");
-    //     assert_eq!(result, Ok(("", Expression::NumLiteral(5.0))));
-    // }
-
-    // #[test]
-    // fn test_term_minus() {
-    //     let result = term("(-5)+1");
-    //     assert_eq!(result, Ok(("+1", Expression::NumLiteral(-5.0))));
-    // }
-
-    // #[test]
-    // fn test_term_plus() {
-    //     let result = term("((1 + 2) + (3 + 4)) + 5 + 6");
-    //     assert_eq!(
-    //         result,
-    //         Ok((
-    //             " + 5 + 6",
-    //             Expression::Add(
-    //                 Box::new(Expression::Add(
-    //                     Box::new(Expression::NumLiteral(1.)),
-    //                     Box::new(Expression::NumLiteral(2.)),
-    //                 )),
-    //                 Box::new(Expression::Add(
-    //                     Box::new(Expression::NumLiteral(3.)),
-    //                     Box::new(Expression::NumLiteral(4.)),
-    //                 ))
-    //             )
-    //         ))
-    //     );
-    // }
 
     #[test]
     fn test_eval_1() {
@@ -244,6 +245,21 @@ mod test {
     #[test]
     fn test_eval_9() {
         assert_eq!(ex_eval("2 * 3 / 3"), Ok(2.));
+    }
+
+    #[test]
+    fn test_fn_invoke_1() {
+        assert_eq!(ex_eval("sqrt(2) / 2"), Ok(0.7071067811865476));
+    }
+
+    #[test]
+    fn test_fn_invoke_2() {
+        assert_eq!(ex_eval("sin(pi / 4)"), Ok(0.7071067811865475));
+    }
+
+    #[test]
+    fn test_fn_invoke_3() {
+        assert_eq!(ex_eval("atan2(1,1)"), Ok(0.7853981633974483));
     }
 }
 
