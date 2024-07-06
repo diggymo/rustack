@@ -7,15 +7,16 @@ use std::io::Read;
 use std::thread::panicking;
 use std::{error::Error, ops::Range, str::Chars, vec};
 
-use nom::Err;
 use nom::branch::permutation;
 use nom::bytes::complete::tag;
 use nom::character::complete::{
-    alpha1, alphanumeric0, alphanumeric1, char, digit0, digit1, one_of,
+    alpha1, alphanumeric0, alphanumeric1, char, digit0, digit1, one_of, space0, space1,
 };
 use nom::combinator::{opt, recognize};
 use nom::multi::{many0, separated_list0};
 use nom::number::complete::recognize_float;
+use nom::sequence::terminated;
+use nom::Err;
 use nom::{
     branch::alt,
     character::complete::multispace0,
@@ -24,7 +25,7 @@ use nom::{
     sequence::{delimited, pair},
     IResult, Parser,
 };
-
+type Variables = HashMap<String, f64>;
 #[derive(Debug, PartialEq, Clone)]
 enum Expression<'src> {
     Ident(&'src str),
@@ -37,12 +38,13 @@ enum Expression<'src> {
     If(
         Box<Expression<'src>>,
         Box<Expression<'src>>,
-        Option<Box<Expression<'src>>>
-    )
+        Option<Box<Expression<'src>>>,
+    ),
 }
 
 type Statements<'a> = Vec<Statement<'a>>;
 
+#[derive(Debug, PartialEq, Clone)]
 enum Statement<'src> {
     // 式文
     // `get_value();` や `register_user(name);`など
@@ -50,37 +52,71 @@ enum Statement<'src> {
     // 変数宣言
     VarDef(&'src str, Expression<'src>),
     // 変数代入
-    VarAssign(&'src str, Expression<'src>)
+    VarAssign(&'src str, Expression<'src>),
+
+    For {
+        loop_var: &'src str,
+        start: Expression<'src>,
+        end: Expression<'src>,
+        stmts: Statements<'src>,
+    },
 }
 
-fn statements(input: &str) -> Result<Statements, nom::error::Error<&str>> {
-    let (_, res) = separated_list0(tag(";"), statement)(input).unwrap();
-    Ok(res)
+fn statements(input: &str) -> IResult<&str, Statements> {
+    let (input, stmts) = many0(statement)(input)?;
+    // NOTE: 必要？
+    // let (input, _) = opt(char(';'))(input)?;
+    Ok((input, stmts))
 }
 
 fn statement(input: &str) -> IResult<&str, Statement> {
-   space_delimited(alt((var_def, var_assign, expr_statement)))(input)
+    alt((
+        for_statement,
+        terminated(alt((var_def, var_assign, expr_statement)), char(';')),
+    ))(input)
+}
+
+fn for_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = space_delimited(tag("for"))(input)?;
+    println!("#");
+    let (input, (_, loop_identifier, _, _, start_expr, _, end_expr)) =
+        permutation((space0, identifier, space1, tag("in"), expr, tag("to"), expr))(input)?;
+    println!("##");
+
+    let (input, statement_vec) = delimited(
+        space_delimited(char('{')),
+        many0(statement),
+        space_delimited(char('}')),
+    )(input)?;
+
+    return Ok((
+        input,
+        Statement::For {
+            loop_var: loop_identifier,
+            start: start_expr,
+            end: end_expr,
+            stmts: statement_vec,
+        },
+    ));
 }
 
 fn var_def(input: &str) -> IResult<&str, Statement> {
     permutation((
-        space_delimited(tag("var")), 
-        space_delimited(identifier), 
-        space_delimited(char('=')), 
-        space_delimited(expr)
-    ))(input).map(|(next_input,parsed) | {
-        (next_input, Statement::VarDef(parsed.1, parsed.3))
-    })
+        space_delimited(tag("var")),
+        space_delimited(identifier),
+        space_delimited(char('=')),
+        space_delimited(expr),
+    ))(input)
+    .map(|(next_input, parsed)| (next_input, Statement::VarDef(parsed.1, parsed.3)))
 }
 
 fn var_assign(input: &str) -> IResult<&str, Statement> {
     permutation((
         space_delimited(identifier),
         space_delimited(char('=')),
-        space_delimited(expr)
-    ))(input).map(|(next_input,parsed) | {
-        (next_input, Statement::VarAssign(parsed.0, parsed.2))
-    })
+        space_delimited(expr),
+    ))(input)
+    .map(|(next_input, parsed)| (next_input, Statement::VarAssign(parsed.0, parsed.2)))
 }
 
 fn expr_statement(input: &str) -> IResult<&str, Statement> {
@@ -90,47 +126,65 @@ fn expr_statement(input: &str) -> IResult<&str, Statement> {
 }
 
 fn main() {
-
-    let mut variables = HashMap::new();
-
     let mut buf = String::new();
     if std::io::stdin().read_to_string(&mut buf).is_ok() {
         let parsed_statements = match statements(&buf) {
-            Ok(parsed_statements) => parsed_statements,
+            Ok((_, parsed_statements)) => parsed_statements,
             Err(e) => {
                 eprintln!("parsed error: {e:?}");
                 return;
             }
         };
+        dbg!(&parsed_statements);
+        let mut variables = HashMap::new();
+        eval_stmts(&parsed_statements, &mut variables);
+    }
+}
 
-        for statement in parsed_statements {
-            match statement {
-                Statement::VarDef(identifier,expression ) => {
-                    variables.insert(identifier, eval(expression, &variables));
-                },
-                Statement::VarAssign(identifier,expression ) => {
-                    if !variables.contains_key(identifier) {
-                        panic!("存在していません");
-                    }
-                    variables.insert(identifier, eval(expression, &variables));
-                },
-                Statement::Expression(expression) => {
-                    println!("eval: {:?}", eval(expression, &variables));
+fn eval_stmts(stmts: &Statements, variables: &mut Variables) {
+    for statement in stmts {
+        match statement {
+            Statement::VarDef(identifier, expression) => {
+                variables.insert(identifier.to_string(), eval(expression, variables));
+            }
+            Statement::VarAssign(identifier, expression) => {
+                if !variables.contains_key(*identifier) {
+                    panic!("存在していません");
                 }
+                variables.insert(identifier.to_string(), eval(expression, &variables));
+            }
+            Statement::For {
+                loop_var,
+                start,
+                end,
+                stmts: loop_stmts,
+            } => {
+                let start_value = eval(start, &variables);
+                let end_value = eval(end, &variables);
+
+                let mut i = start_value;
+                while i < end_value {
+                    variables.insert(loop_var.to_string(), i);
+                    eval_stmts(loop_stmts, variables);
+                    i += 1.;
+                }
+            }
+            Statement::Expression(expression) => {
+                println!("eval: {:?}", eval(expression, &variables));
             }
         }
     }
 }
 
-fn eval(expr: Expression, vars: &HashMap<&str, f64>) -> f64 {
+fn eval(expr: &Expression, vars: &Variables) -> f64 {
     match expr {
         Expression::Ident("pi") => std::f64::consts::PI,
-        Expression::Ident(id) => *vars.get(id).expect("Unknown name {:?}"),
-        Expression::NumLiteral(n) => n,
-        Expression::Add(lhs, rhs) => eval(*lhs, vars) + eval(*rhs, vars),
-        Expression::Sub(lhs, rhs) => eval(*lhs, vars) - eval(*rhs, vars),
-        Expression::Mul(lhs, rhs) => eval(*lhs, vars) * eval(*rhs, vars),
-        Expression::Div(lhs, rhs) => eval(*lhs, vars) / eval(*rhs, vars),
+        Expression::Ident(id) => *vars.get(*id).expect("Unknown name {:?}"),
+        Expression::NumLiteral(n) => *n,
+        Expression::Add(lhs, rhs) => eval(lhs, vars) + eval(rhs, vars),
+        Expression::Sub(lhs, rhs) => eval(lhs, vars) - eval(rhs, vars),
+        Expression::Mul(lhs, rhs) => eval(lhs, vars) * eval(rhs, vars),
+        Expression::Div(lhs, rhs) => eval(lhs, vars) / eval(rhs, vars),
         Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args, vars),
         Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args, vars),
         Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args, vars),
@@ -147,28 +201,28 @@ fn eval(expr: Expression, vars: &HashMap<&str, f64>) -> f64 {
             panic!("Unknown function {name:?}")
         }
         Expression::If(condition_ex, true_ex, false_ex) => {
-            let result = eval(*condition_ex, vars);
+            let result = eval(condition_ex, vars);
             if result != 0. {
-                eval(*true_ex, vars)
+                eval(true_ex, vars)
             } else {
-                false_ex.map_or(0., |_false_ex| {
-                    return eval(*_false_ex, vars);
+                false_ex.as_ref().map_or(0., |_false_ex| {
+                    return eval(_false_ex, vars);
                 })
             }
-        },
+        }
     }
 }
 
-fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>, &HashMap<&str, f64>) -> f64 {
+fn unary_fn(f: fn(f64) -> f64) -> impl Fn(&Vec<Expression>, &Variables) -> f64 {
     move |args, variables| {
         f(eval(
             args.into_iter().next().expect("function missing argument"),
-            variables
+            variables,
         ))
     }
 }
 
-fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>, &HashMap<&str, f64>) -> f64 {
+fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(&Vec<Expression>, &Variables) -> f64 {
     move |args, variables| {
         let mut iter = args.into_iter();
 
@@ -178,8 +232,11 @@ fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>, &HashMap<&str, 
     }
 }
 
-fn ex_eval<'src>(input: &'src str, vars: &HashMap<&str, f64>) -> Result<f64, nom::Err<nom::error::Error<&'src str>>> {
-    expr(input).map(|(_, e)| eval(e, vars))
+fn ex_eval<'src>(
+    input: &'src str,
+    vars: &Variables,
+) -> Result<f64, nom::Err<nom::error::Error<&'src str>>> {
+    expr(input).map(|(_, e)| eval(&e, vars))
 }
 
 /**
@@ -212,13 +269,21 @@ fn if_expr(input: &str) -> IResult<&str, Expression> {
         opt(permutation((
             space_delimited(tag("else")),
             space_delimited(delimited(char('{'), expr, char('}'))),
-        ))
-    )))(next_input)
-    .map(|(next_input, (condition, true_expression, false_expresion_option))| {
-        return (next_input, Expression::If(Box::new(condition), Box::new(true_expression), false_expresion_option.map(|(_, false_expresion)| Box::new(false_expresion))));
-    })
+        ))),
+    ))(next_input)
+    .map(
+        |(next_input, (condition, true_expression, false_expresion_option))| {
+            return (
+                next_input,
+                Expression::If(
+                    Box::new(condition),
+                    Box::new(true_expression),
+                    false_expresion_option.map(|(_, false_expresion)| Box::new(false_expresion)),
+                ),
+            );
+        },
+    )
 }
-
 
 fn term(input: &str) -> IResult<&str, Expression> {
     let (i, init) = factor(input)?;
@@ -319,7 +384,10 @@ mod test {
     }
     #[test]
     fn test_eval_2() {
-        assert_eq!(ex_eval("(123 + 456) + pi", &HashMap::new()), Ok(582.1415926535898));
+        assert_eq!(
+            ex_eval("(123 + 456) + pi", &HashMap::new()),
+            Ok(582.1415926535898)
+        );
     }
     #[test]
     fn test_eval_3() {
@@ -351,7 +419,10 @@ mod test {
 
     #[test]
     fn test_eval_6() {
-        assert_eq!(ex_eval("(123 * 456 ) +pi)", &HashMap::new()), Ok(56091.14159265359));
+        assert_eq!(
+            ex_eval("(123 * 456 ) +pi)", &HashMap::new()),
+            Ok(56091.14159265359)
+        );
     }
 
     #[test]
@@ -371,21 +442,52 @@ mod test {
 
     #[test]
     fn test_fn_invoke_1() {
-        assert_eq!(ex_eval("sqrt(2) / 2", &HashMap::new()), Ok(0.7071067811865476));
+        assert_eq!(
+            ex_eval("sqrt(2) / 2", &HashMap::new()),
+            Ok(0.7071067811865476)
+        );
     }
 
     #[test]
     fn test_fn_invoke_2() {
-        assert_eq!(ex_eval("sin(pi / 4)", &HashMap::new()), Ok(0.7071067811865475));
+        assert_eq!(
+            ex_eval("sin(pi / 4)", &HashMap::new()),
+            Ok(0.7071067811865475)
+        );
     }
 
     #[test]
     fn test_fn_invoke_3() {
-        assert_eq!(ex_eval("atan2(1,1)", &HashMap::new()), Ok(0.7853981633974483));
+        assert_eq!(
+            ex_eval("atan2(1,1)", &HashMap::new()),
+            Ok(0.7853981633974483)
+        );
     }
 
     #[test]
     fn test_delimited_with_multi_parentness() {
-        assert_eq!(delimited(char('{'), expr, char('}'))("{if true {1} else{2} }").unwrap().1, Expression::NumLiteral(1.))
+        assert_eq!(
+            delimited(char('{'), expr, char('}'))("{if true {1} else{2} }")
+                .unwrap()
+                .1,
+            Expression::NumLiteral(1.)
+        )
+    }
+
+    #[test]
+    fn test_for() {
+        let result = for_statement("for i in 0 to 10 {i;}").unwrap();
+        assert_eq!(
+            result,
+            (
+                "",
+                Statement::For {
+                    loop_var: "i",
+                    start: Expression::NumLiteral(0.),
+                    end: Expression::NumLiteral(10.),
+                    stmts: vec![Statement::Expression(Expression::Ident("i"))]
+                }
+            )
+        );
     }
 }
