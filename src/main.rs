@@ -1,10 +1,13 @@
 // fn recognizer(input: &str) -> &str;
 
 use core::panic;
+use std::collections::HashMap;
 use std::convert::identity;
 use std::io::Read;
 use std::{error::Error, ops::Range, str::Chars, vec};
 
+use nom::Err;
+use nom::branch::permutation;
 use nom::bytes::complete::tag;
 use nom::character::complete::{
     alpha1, alphanumeric0, alphanumeric1, char, digit0, digit1, one_of,
@@ -32,14 +35,45 @@ enum Expression<'src> {
     FnInvoke(&'src str, Vec<Expression<'src>>),
 }
 
-type Statements<'a> = Vec<Expression<'a>>;
+type Statements<'a> = Vec<Statement<'a>>;
+
+enum Statement<'src> {
+    // 式文
+    // `get_value();` や `register_user(name);`など
+    Expression(Expression<'src>),
+    // 変数宣言
+    VarDef(&'src str, Expression<'src>)
+}
 
 fn statements(input: &str) -> Result<Statements, nom::error::Error<&str>> {
-    let (_, res) = separated_list0(tag(";"), expr)(input).unwrap();
+    let (_, res) = separated_list0(tag(";"), statement)(input).unwrap();
     Ok(res)
 }
 
+fn statement(input: &str) -> IResult<&str, Statement> {
+   space_delimited(alt((var_def, expr_statement)))(input)
+}
+
+fn var_def(input: &str) -> IResult<&str, Statement> {
+    permutation((
+        space_delimited(tag("var")), 
+        space_delimited(identifier), 
+        space_delimited(char('=')), 
+        space_delimited(expr)
+    ))(input).map(|(next_input,parsed) | {
+        (next_input, Statement::VarDef(parsed.1, parsed.3))
+    })
+}
+fn expr_statement(input: &str) -> IResult<&str, Statement> {
+    expr(input).map(|(next_input, parsed_expression)| {
+        (next_input, Statement::Expression(parsed_expression))
+    })
+}
+
 fn main() {
+
+    let mut variables = HashMap::new();
+
     let mut buf = String::new();
     if std::io::stdin().read_to_string(&mut buf).is_ok() {
         let parsed_statements = match statements(&buf) {
@@ -51,58 +85,66 @@ fn main() {
         };
 
         for statement in parsed_statements {
-            println!("eval: {:?}", eval(statement));
+            match statement {
+                Statement::VarDef(identifier,expression ) => {
+                    variables.insert(identifier, eval(expression, &variables));
+                },
+                Statement::Expression(expression) => {
+                    println!("eval: {:?}", eval(expression, &variables));
+                }
+            }
         }
     }
 }
 
-fn eval(expr: Expression) -> f64 {
+fn eval(expr: Expression, vars: &HashMap<&str, f64>) -> f64 {
     match expr {
         Expression::Ident("pi") => std::f64::consts::PI,
-        Expression::Ident(id) => panic!("Unknown name {:?}", id),
+        Expression::Ident(id) => *vars.get(id).expect("Unknown name {:?}"),
         Expression::NumLiteral(n) => n,
-        Expression::Add(lhs, rhs) => eval(*lhs) + eval(*rhs),
-        Expression::Sub(lhs, rhs) => eval(*lhs) - eval(*rhs),
-        Expression::Mul(lhs, rhs) => eval(*lhs) * eval(*rhs),
-        Expression::Div(lhs, rhs) => eval(*lhs) / eval(*rhs),
-        Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args),
-        Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args),
-        Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args),
-        Expression::FnInvoke("tan", args) => unary_fn(f64::tan)(args),
-        Expression::FnInvoke("asin", args) => unary_fn(f64::asin)(args),
-        Expression::FnInvoke("acos", args) => unary_fn(f64::acos)(args),
-        Expression::FnInvoke("atan", args) => unary_fn(f64::atan)(args),
-        Expression::FnInvoke("atan2", args) => binary_fn(f64::atan2)(args),
-        Expression::FnInvoke("pow", args) => binary_fn(f64::powf)(args),
-        Expression::FnInvoke("exp", args) => unary_fn(f64::exp)(args),
-        Expression::FnInvoke("log", args) => binary_fn(f64::log)(args),
-        Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args),
+        Expression::Add(lhs, rhs) => eval(*lhs, vars) + eval(*rhs, vars),
+        Expression::Sub(lhs, rhs) => eval(*lhs, vars) - eval(*rhs, vars),
+        Expression::Mul(lhs, rhs) => eval(*lhs, vars) * eval(*rhs, vars),
+        Expression::Div(lhs, rhs) => eval(*lhs, vars) / eval(*rhs, vars),
+        Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args, vars),
+        Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args, vars),
+        Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args, vars),
+        Expression::FnInvoke("tan", args) => unary_fn(f64::tan)(args, vars),
+        Expression::FnInvoke("asin", args) => unary_fn(f64::asin)(args, vars),
+        Expression::FnInvoke("acos", args) => unary_fn(f64::acos)(args, vars),
+        Expression::FnInvoke("atan", args) => unary_fn(f64::atan)(args, vars),
+        Expression::FnInvoke("atan2", args) => binary_fn(f64::atan2)(args, vars),
+        Expression::FnInvoke("pow", args) => binary_fn(f64::powf)(args, vars),
+        Expression::FnInvoke("exp", args) => unary_fn(f64::exp)(args, vars),
+        Expression::FnInvoke("log", args) => binary_fn(f64::log)(args, vars),
+        Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args, vars),
         Expression::FnInvoke(name, _) => {
             panic!("Unknown function {name:?}")
         }
     }
 }
 
-fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
-    move |args| {
+fn unary_fn(f: fn(f64) -> f64) -> impl Fn(Vec<Expression>, &HashMap<&str, f64>) -> f64 {
+    move |args, variables| {
         f(eval(
             args.into_iter().next().expect("function missing argument"),
+            variables
         ))
     }
 }
 
-fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>) -> f64 {
-    move |args| {
+fn binary_fn(f: fn(f64, f64) -> f64) -> impl Fn(Vec<Expression>, &HashMap<&str, f64>) -> f64 {
+    move |args, variables| {
         let mut iter = args.into_iter();
 
-        let lhs = eval(iter.next().unwrap());
-        let rhs = eval(iter.next().unwrap());
+        let lhs = eval(iter.next().unwrap(), variables);
+        let rhs = eval(iter.next().unwrap(), variables);
         f(lhs, rhs)
     }
 }
 
-fn ex_eval<'src>(input: &'src str) -> Result<f64, nom::Err<nom::error::Error<&'src str>>> {
-    expr(input).map(|(_, e)| eval(e))
+fn ex_eval<'src>(input: &'src str, vars: &HashMap<&str, f64>) -> Result<f64, nom::Err<nom::error::Error<&'src str>>> {
+    expr(input).map(|(_, e)| eval(e, vars))
 }
 
 /**
@@ -218,19 +260,19 @@ mod test {
 
     #[test]
     fn test_eval_1() {
-        assert_eq!(ex_eval("123"), Ok(123.));
+        assert_eq!(ex_eval("123", &HashMap::new()), Ok(123.));
     }
     #[test]
     fn test_eval_2() {
-        assert_eq!(ex_eval("(123 + 456) + pi"), Ok(582.1415926535898));
+        assert_eq!(ex_eval("(123 + 456) + pi", &HashMap::new()), Ok(582.1415926535898));
     }
     #[test]
     fn test_eval_3() {
-        assert_eq!(ex_eval("10 + (100+1)"), Ok(111.));
+        assert_eq!(ex_eval("10 + (100+1)", &HashMap::new()), Ok(111.));
     }
     #[test]
     fn test_eval_4() {
-        assert_eq!(ex_eval("((1+2)+(3+4))+5+6"), Ok(21.));
+        assert_eq!(ex_eval("((1+2)+(3+4))+5+6", &HashMap::new()), Ok(21.));
     }
 
     #[test]
@@ -249,41 +291,41 @@ mod test {
 
     #[test]
     fn test_eval_5() {
-        assert_eq!(ex_eval("2 * pi"), Ok(6.283185307179586));
+        assert_eq!(ex_eval("2 * pi", &HashMap::new()), Ok(6.283185307179586));
     }
 
     #[test]
     fn test_eval_6() {
-        assert_eq!(ex_eval("(123 * 456 ) +pi)"), Ok(56091.14159265359));
+        assert_eq!(ex_eval("(123 * 456 ) +pi)", &HashMap::new()), Ok(56091.14159265359));
     }
 
     #[test]
     fn test_eval_7() {
-        assert_eq!(ex_eval("10 - ( 100 + 1 )"), Ok(-91.));
+        assert_eq!(ex_eval("10 - ( 100 + 1 )", &HashMap::new()), Ok(-91.));
     }
 
     #[test]
     fn test_eval_8() {
-        assert_eq!(ex_eval("(3+7) /(2+3)"), Ok(2.));
+        assert_eq!(ex_eval("(3+7) /(2+3)", &HashMap::new()), Ok(2.));
     }
 
     #[test]
     fn test_eval_9() {
-        assert_eq!(ex_eval("2 * 3 / 3"), Ok(2.));
+        assert_eq!(ex_eval("2 * 3 / 3", &HashMap::new()), Ok(2.));
     }
 
     #[test]
     fn test_fn_invoke_1() {
-        assert_eq!(ex_eval("sqrt(2) / 2"), Ok(0.7071067811865476));
+        assert_eq!(ex_eval("sqrt(2) / 2", &HashMap::new()), Ok(0.7071067811865476));
     }
 
     #[test]
     fn test_fn_invoke_2() {
-        assert_eq!(ex_eval("sin(pi / 4)"), Ok(0.7071067811865475));
+        assert_eq!(ex_eval("sin(pi / 4)", &HashMap::new()), Ok(0.7071067811865475));
     }
 
     #[test]
     fn test_fn_invoke_3() {
-        assert_eq!(ex_eval("atan2(1,1)"), Ok(0.7853981633974483));
+        assert_eq!(ex_eval("atan2(1,1)", &HashMap::new()), Ok(0.7853981633974483));
     }
 }
