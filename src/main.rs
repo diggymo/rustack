@@ -4,6 +4,7 @@ use core::panic;
 use std::collections::HashMap;
 use std::convert::identity;
 use std::io::Read;
+use std::thread::panicking;
 use std::{error::Error, ops::Range, str::Chars, vec};
 
 use nom::Err;
@@ -42,7 +43,9 @@ enum Statement<'src> {
     // `get_value();` や `register_user(name);`など
     Expression(Expression<'src>),
     // 変数宣言
-    VarDef(&'src str, Expression<'src>)
+    VarDef(&'src str, Expression<'src>),
+    // 変数代入
+    VarAssign(&'src str, Expression<'src>)
 }
 
 fn statements(input: &str) -> Result<Statements, nom::error::Error<&str>> {
@@ -51,7 +54,7 @@ fn statements(input: &str) -> Result<Statements, nom::error::Error<&str>> {
 }
 
 fn statement(input: &str) -> IResult<&str, Statement> {
-   space_delimited(alt((var_def, expr_statement)))(input)
+   space_delimited(alt((var_def, var_assign, expr_statement)))(input)
 }
 
 fn var_def(input: &str) -> IResult<&str, Statement> {
@@ -64,6 +67,17 @@ fn var_def(input: &str) -> IResult<&str, Statement> {
         (next_input, Statement::VarDef(parsed.1, parsed.3))
     })
 }
+
+fn var_assign(input: &str) -> IResult<&str, Statement> {
+    permutation((
+        space_delimited(identifier),
+        space_delimited(char('=')),
+        space_delimited(expr)
+    ))(input).map(|(next_input,parsed) | {
+        (next_input, Statement::VarAssign(parsed.0, parsed.2))
+    })
+}
+
 fn expr_statement(input: &str) -> IResult<&str, Statement> {
     expr(input).map(|(next_input, parsed_expression)| {
         (next_input, Statement::Expression(parsed_expression))
@@ -87,6 +101,12 @@ fn main() {
         for statement in parsed_statements {
             match statement {
                 Statement::VarDef(identifier,expression ) => {
+                    variables.insert(identifier, eval(expression, &variables));
+                },
+                Statement::VarAssign(identifier,expression ) => {
+                    if !variables.contains_key(identifier) {
+                        panic!("存在していません");
+                    }
                     variables.insert(identifier, eval(expression, &variables));
                 },
                 Statement::Expression(expression) => {
