@@ -2,6 +2,7 @@
 
 use core::panic;
 use std::convert::identity;
+use std::io::Read;
 use std::{error::Error, ops::Range, str::Chars, vec};
 
 use nom::bytes::complete::tag;
@@ -9,7 +10,7 @@ use nom::character::complete::{
     alpha1, alphanumeric0, alphanumeric1, char, digit0, digit1, one_of,
 };
 use nom::combinator::{opt, recognize};
-use nom::multi::many0;
+use nom::multi::{many0, separated_list0};
 use nom::number::complete::recognize_float;
 use nom::{
     branch::alt,
@@ -29,6 +30,30 @@ enum Expression<'src> {
     Mul(Box<Expression<'src>>, Box<Expression<'src>>),
     Div(Box<Expression<'src>>, Box<Expression<'src>>),
     FnInvoke(&'src str, Vec<Expression<'src>>),
+}
+
+type Statements<'a> = Vec<Expression<'a>>;
+
+fn statements(input: &str) -> Result<Statements, nom::error::Error<&str>> {
+    let (_, res) = separated_list0(tag(";"), expr)(input).unwrap();
+    Ok(res)
+}
+
+fn main() {
+    let mut buf = String::new();
+    if std::io::stdin().read_to_string(&mut buf).is_ok() {
+        let parsed_statements = match statements(&buf) {
+            Ok(parsed_statements) => parsed_statements,
+            Err(e) => {
+                eprintln!("parsed error: {e:?}");
+                return;
+            }
+        };
+
+        for statement in parsed_statements {
+            println!("eval: {:?}", eval(statement));
+        }
+    }
 }
 
 fn eval(expr: Expression) -> f64 {
@@ -262,5 +287,3 @@ mod test {
         assert_eq!(ex_eval("atan2(1,1)"), Ok(0.7853981633974483));
     }
 }
-
-fn main() {}
