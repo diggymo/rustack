@@ -2,22 +2,15 @@
 
 use core::panic;
 use std::collections::HashMap;
-use std::convert::identity;
-use std::hash::Hash;
 use std::io::Read;
-use std::thread::panicking;
-use std::{error::Error, ops::Range, str::Chars, vec};
 
 use nom::branch::permutation;
 use nom::bytes::complete::tag;
-use nom::character::complete::{
-    alpha1, alphanumeric0, alphanumeric1, char, digit0, digit1, one_of, space0, space1,
-};
+use nom::character::complete::{alpha1, alphanumeric1, char, space0, space1};
 use nom::combinator::{opt, recognize};
-use nom::multi::{many0, many1, separated_list0};
+use nom::multi::{many0, separated_list0};
 use nom::number::complete::recognize_float;
 use nom::sequence::terminated;
-use nom::Err;
 use nom::{
     branch::alt,
     character::complete::multispace0,
@@ -325,33 +318,12 @@ fn eval(expr: &Expression, frame: &StackFrame) -> f64 {
         Expression::Sub(lhs, rhs) => eval(lhs, frame) - eval(rhs, frame),
         Expression::Mul(lhs, rhs) => eval(lhs, frame) * eval(rhs, frame),
         Expression::Div(lhs, rhs) => eval(lhs, frame) / eval(rhs, frame),
-        // Expression::FnInvoke("sqrt", args) => unary_fn(f64::sqrt)(args, vars),
-        // Expression::FnInvoke("sin", args) => unary_fn(f64::sin)(args, vars),
-        // Expression::FnInvoke("cos", args) => unary_fn(f64::cos)(args, vars),
-        // Expression::FnInvoke("tan", args) => unary_fn(f64::tan)(args, vars),
-        // Expression::FnInvoke("asin", args) => unary_fn(f64::asin)(args, vars),
-        // Expression::FnInvoke("acos", args) => unary_fn(f64::acos)(args, vars),
-        // Expression::FnInvoke("atan", args) => unary_fn(f64::atan)(args, vars),
-        // Expression::FnInvoke("atan2", args) => binary_fn(f64::atan2)(args, vars),
-        // Expression::FnInvoke("pow", args) => binary_fn(f64::powf)(args, vars),
-        // Expression::FnInvoke("exp", args) => unary_fn(f64::exp)(args, vars),
-        // Expression::FnInvoke("log", args) => binary_fn(f64::log)(args, vars),
-        // Expression::FnInvoke("log10", args) => unary_fn(f64::log10)(args, vars),
         Expression::FnInvoke(name, args) => {
             if let Some(func) = frame.get_fn(*name) {
                 let args: Vec<_> = args.into_iter().map(|e| eval(e, frame)).collect();
                 func.call(&args, frame)
             } else {
                 panic!("aaa");
-                // match func {
-                //     FnDef::User(UserFn { args, stmts }) => {
-
-                //     },
-                //     FnDef::Native(NativeFn { code }) => {
-                //         let a = args.into_iter().map(|e| eval(e, frame));
-                //         let z = code(args)(a);
-                //     },
-                // }
             }
         }
         Expression::If(condition_ex, true_ex, false_ex) => {
@@ -367,14 +339,6 @@ fn eval(expr: &Expression, frame: &StackFrame) -> f64 {
     }
 }
 
-// fn unary_fn(f: fn(f64) -> f64) -> impl Fn(&Vec<Expression>, &Variables) -> f64 {
-//     move |args, variables| {
-//         f(eval(
-//             args.into_iter().next().expect("function missing argument"),
-//             variables,
-//         ))
-//     }
-// }
 fn unary_fn<'src>(f: fn(f64) -> f64) -> FnDef<'src> {
     FnDef::Native(NativeFn {
         code: Box::new(move |args| f(*args.into_iter().next().expect("function missing arg"))),
