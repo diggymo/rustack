@@ -71,10 +71,37 @@ impl<'src> StackFrame<'src> {
 
         return None;
     }
+
+    pub fn get_var(&self, name: &str) -> &f64 {
+        if let Some(var_value) = self.vars.get(name) {
+            return var_value;
+        }
+
+        if let Some(frame) = self.uplevel {
+            return frame.get_var(name);
+        }
+
+        panic!("存在しない変数が参照されました name={}", name);
+    }
+
+    pub fn set_var(&mut self, name: &str, value: f64) -> &f64 {
+        if let Some(_) = self.vars.get(name) {
+            self.vars.insert(name.to_string(), value);
+        }
+
+        // if let Some(frame) = self.uplevel {
+        //     // frame.set_var(name, value);
+        // }
+        // NOTE: 親スタックの内容を改変しないといけないため、難しくなる
+        panic!(
+            "親スタックの値は変更できません...もしくは存在しない変数が参照されました name={}",
+            name
+        );
+    }
 }
 
 fn _print(a: f64) -> f64 {
-    print!("{a}");
+    println!("{a}");
     a
 }
 
@@ -89,8 +116,8 @@ enum Expression<'src> {
     FnInvoke(&'src str, Vec<Expression<'src>>),
     If(
         Box<Expression<'src>>,
-        Box<Expression<'src>>,
-        Option<Box<Expression<'src>>>,
+        Box<Statements<'src>>,
+        Option<Box<Statements<'src>>>,
     ),
 }
 
@@ -118,6 +145,7 @@ enum Statement<'src> {
         args: Vec<&'src str>,
         stms: Statements<'src>,
     },
+    Return(Expression<'src>),
 }
 
 enum FnDef<'src> {
@@ -161,8 +189,19 @@ fn statement(input: &str) -> IResult<&str, Statement> {
     alt((
         for_statement,
         fn_def_statement,
+        return_statement,
         terminated(alt((var_def, var_assign, expr_statement)), char(';')),
     ))(input)
+}
+
+fn return_statement(input: &str) -> IResult<&str, Statement> {
+    let (next_input, (_, expression, _)) = permutation((
+        space_delimited(tag("return")),
+        expr,
+        space_delimited(char(';')),
+    ))(input)?;
+
+    return Ok((next_input, Statement::Return(expression)));
 }
 
 fn for_statement(input: &str) -> IResult<&str, Statement> {
@@ -254,26 +293,34 @@ fn main() {
                 return;
             }
         };
+        dbg!(&parsed_statements);
         eval_stmts(&parsed_statements, &mut stack_frame);
     }
 }
 
 fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>) -> f64 {
     let mut last_value: f64 = 0.;
-    for statement in stmts {
+    'statement_loop: for statement in stmts {
         match statement {
             Statement::VarDef(identifier, expression) => {
-                stack_frame
-                    .vars
-                    .insert(identifier.to_string(), eval(expression, stack_frame));
+                let value = eval(expression, stack_frame);
+                stack_frame.vars.insert(identifier.to_string(), value);
+            }
+            Statement::Return(return_expression) => {
+                last_value = eval(return_expression, stack_frame);
+                dbg!("##", &stmts, &return_expression, &last_value);
+                // FIXME: eval_stmtsからbreakするだけでは不足している。さらに親のstmtsでbreakしなければならない
+                break 'statement_loop;
             }
             Statement::VarAssign(identifier, expression) => {
                 if !stack_frame.vars.contains_key(*identifier) {
                     panic!("存在していません");
                 }
+                let value = eval(expression, stack_frame);
                 stack_frame
                     .vars
-                    .insert(identifier.to_string(), eval(expression, stack_frame));
+                    .insert(identifier.to_string(), value)
+                    .unwrap();
             }
             Statement::For {
                 loop_var,
@@ -306,21 +353,22 @@ fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>
         }
     }
 
+    dbg!(&last_value);
     last_value
 }
 
-fn eval(expr: &Expression, frame: &StackFrame) -> f64 {
+fn eval<'src>(expr: &Expression<'src>, frame: &mut StackFrame<'src>) -> f64 {
     match expr {
         Expression::Ident("pi") => std::f64::consts::PI,
-        Expression::Ident(id) => *frame.vars.get(*id).expect("Unknown name {:?}"),
+        Expression::Ident(id) => *frame.get_var(*id),
         Expression::NumLiteral(n) => *n,
         Expression::Add(lhs, rhs) => eval(lhs, frame) + eval(rhs, frame),
         Expression::Sub(lhs, rhs) => eval(lhs, frame) - eval(rhs, frame),
         Expression::Mul(lhs, rhs) => eval(lhs, frame) * eval(rhs, frame),
         Expression::Div(lhs, rhs) => eval(lhs, frame) / eval(rhs, frame),
         Expression::FnInvoke(name, args) => {
+            let args: Vec<_> = args.into_iter().map(|e| eval(e, frame)).collect();
             if let Some(func) = frame.get_fn(*name) {
-                let args: Vec<_> = args.into_iter().map(|e| eval(e, frame)).collect();
                 func.call(&args, frame)
             } else {
                 panic!("aaa");
@@ -329,10 +377,12 @@ fn eval(expr: &Expression, frame: &StackFrame) -> f64 {
         Expression::If(condition_ex, true_ex, false_ex) => {
             let result = eval(condition_ex, frame);
             if result != 0. {
-                eval(true_ex, frame)
+                println!("##true##");
+                eval_stmts(true_ex, frame)
             } else {
+                println!("##false##");
                 false_ex.as_ref().map_or(0., |_false_ex| {
-                    return eval(_false_ex, frame);
+                    return eval_stmts(_false_ex, frame);
                 })
             }
         }
@@ -359,7 +409,7 @@ fn binary_fn<'src>(f: fn(f64, f64) -> f64) -> FnDef<'src> {
 
 fn ex_eval<'src>(
     input: &'src str,
-    frame: &mut StackFrame,
+    frame: &mut StackFrame<'src>,
 ) -> Result<f64, nom::Err<nom::error::Error<&'src str>>> {
     expr(input).map(|(_, e)| eval(&e, frame))
 }
@@ -390,10 +440,10 @@ fn if_expr(input: &str) -> IResult<&str, Expression> {
     let (next_input, _) = space_delimited(tag("if"))(input)?;
     permutation((
         space_delimited(expr),
-        space_delimited(delimited(char('{'), expr, char('}'))),
+        space_delimited(delimited(char('{'), space_delimited(statements), char('}'))),
         opt(permutation((
             space_delimited(tag("else")),
-            space_delimited(delimited(char('{'), expr, char('}'))),
+            space_delimited(delimited(char('{'), space_delimited(statements), char('}'))),
         ))),
     ))(next_input)
     .map(
@@ -471,6 +521,8 @@ fn func_call(input: &str) -> IResult<&str, Expression> {
 
 #[cfg(test)]
 mod test {
+    use std::hash::Hash;
+
     use super::*;
 
     #[test]
@@ -601,13 +653,15 @@ mod test {
     #[test]
     fn test_delimited_with_multi_parentness() {
         assert_eq!(
-            delimited(char('{'), if_expr, char('}'))("{if true {1} else{2} }")
+            delimited(char('{'), if_expr, char('}'))("{if true {1;} else{2;} }")
                 .unwrap()
                 .1,
             Expression::If(
                 Box::new(Expression::Ident("true")),
-                Box::new(Expression::NumLiteral(1.0)),
-                Some(Box::new(Expression::NumLiteral(2.0)))
+                Box::new(vec![Statement::Expression(Expression::NumLiteral(1.0))]),
+                Some(Box::new(vec![Statement::Expression(
+                    Expression::NumLiteral(2.0)
+                )]))
             )
         )
     }
@@ -626,6 +680,87 @@ mod test {
                     stmts: vec![Statement::Expression(Expression::Ident("i"))]
                 }
             )
+        );
+    }
+
+    #[test]
+    fn test_if_true() {
+        assert_eq!(
+            eval(&expr("if 1 {5;}").unwrap().1, &mut StackFrame::new()),
+            5.
+        );
+    }
+
+    #[test]
+    fn test_if_false() {
+        assert_eq!(
+            eval(&expr("if 0 {5;}").unwrap().1, &mut StackFrame::new()),
+            0.
+        );
+    }
+
+    #[test]
+    fn test_if2() {
+        assert_eq!(
+            eval_stmts(
+                &statements("var a = 1; if 1 {a=2;}else{a=3;}; a;")
+                    .unwrap()
+                    .1,
+                &mut StackFrame::new()
+            ),
+            2.
+        );
+    }
+
+    #[test]
+    fn test_if3() {
+        assert_eq!(
+            eval_stmts(
+                &statements("var a = 4; if 1 { print(a); } ;print(a);")
+                    .unwrap()
+                    .1,
+                &mut StackFrame::new()
+            ),
+            4.
+        );
+    }
+
+    #[test]
+    fn test_if4() {
+        assert_eq!(
+            eval_stmts(
+                &statements("var a = 4; var z = if 0 { print(a); } else {5;};print(z);")
+                    .unwrap()
+                    .1,
+                &mut StackFrame::new()
+            ),
+            5.
+        );
+    }
+
+    #[test]
+    fn test_if5() {
+        assert_eq!(
+            eval_stmts(
+                &statements("var a = 4; var z =if 0 {print(a);}else{5;};print(z);")
+                    .unwrap()
+                    .1,
+                &mut StackFrame::new()
+            ),
+            5.
+        );
+    }
+
+    #[test]
+    fn test_if6() {
+        assert_eq!(
+            eval_stmts(
+                &statements("var a = 1;var hoge = if 1 {print(a+1);};print(a);")
+                    .unwrap()
+                    .1,
+                &mut StackFrame::new()
+            ),
+            1.
         );
     }
 }

@@ -2,5 +2,16 @@ var a = 1;
 var five = 5;
 var three=3;
 
-var result = if a-1 { five } else {three};
-result;
+var result = if a-1 { five; } else {three;};
+print(result);
+
+var result2 = if a { five; };
+print(result2);
+
+if a { 
+  print(1234567);
+};
+
+if a-1 { 
+  print(1234567);
+};
