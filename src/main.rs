@@ -201,22 +201,20 @@ fn num_expr(input: &str) -> IResult<&str, Expression> {
 }
 
 fn expr(input: &str) -> IResult<&str, Expression> {
-    dbg!("expr");
     alt((if_expr, num_expr))(input)
 }
 
 fn if_expr(input: &str) -> IResult<&str, Expression> {
-    dbg!("if_expr");
-    space_delimited(permutation((
-        space_delimited(tag("if")),
+    let (next_input, _) = space_delimited(tag("if"))(input)?;
+    permutation((
         space_delimited(expr),
         space_delimited(delimited(char('{'), expr, char('}'))),
         opt(permutation((
             space_delimited(tag("else")),
             space_delimited(delimited(char('{'), expr, char('}'))),
         ))
-    ))))(input)
-    .map(|(next_input, (_, condition, true_expression, false_expresion_option))| {
+    )))(next_input)
+    .map(|(next_input, (condition, true_expression, false_expresion_option))| {
         return (next_input, Expression::If(Box::new(condition), Box::new(true_expression), false_expresion_option.map(|(_, false_expresion)| Box::new(false_expresion))));
     })
 }
