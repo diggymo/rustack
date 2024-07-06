@@ -1,0 +1,6 @@
+var a = 1;
+var five = 5;
+var three=3;
+
+var result = if a-1 { five } else {three};
+result;

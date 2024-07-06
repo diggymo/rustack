@@ -34,6 +34,11 @@ enum Expression<'src> {
     Mul(Box<Expression<'src>>, Box<Expression<'src>>),
     Div(Box<Expression<'src>>, Box<Expression<'src>>),
     FnInvoke(&'src str, Vec<Expression<'src>>),
+    If(
+        Box<Expression<'src>>,
+        Box<Expression<'src>>,
+        Option<Box<Expression<'src>>>
+    )
 }
 
 type Statements<'a> = Vec<Statement<'a>>;
@@ -141,6 +146,16 @@ fn eval(expr: Expression, vars: &HashMap<&str, f64>) -> f64 {
         Expression::FnInvoke(name, _) => {
             panic!("Unknown function {name:?}")
         }
+        Expression::If(condition_ex, true_ex, false_ex) => {
+            let result = eval(*condition_ex, vars);
+            if result != 0. {
+                eval(*true_ex, vars)
+            } else {
+                false_ex.map_or(0., |_false_ex| {
+                    return eval(*_false_ex, vars);
+                })
+            }
+        },
     }
 }
 
@@ -171,7 +186,7 @@ fn ex_eval<'src>(input: &'src str, vars: &HashMap<&str, f64>) -> Result<f64, nom
  * 式。項+加算。
  * `((-1))` `+5` `3+2`
  */
-fn expr(input: &str) -> IResult<&str, Expression> {
+fn num_expr(input: &str) -> IResult<&str, Expression> {
     let (i, init) = term(input)?;
 
     fold_many0(
@@ -184,6 +199,28 @@ fn expr(input: &str) -> IResult<&str, Expression> {
         },
     )(i)
 }
+
+fn expr(input: &str) -> IResult<&str, Expression> {
+    dbg!("expr");
+    alt((if_expr, num_expr))(input)
+}
+
+fn if_expr(input: &str) -> IResult<&str, Expression> {
+    dbg!("if_expr");
+    space_delimited(permutation((
+        space_delimited(tag("if")),
+        space_delimited(expr),
+        space_delimited(delimited(char('{'), expr, char('}'))),
+        opt(permutation((
+            space_delimited(tag("else")),
+            space_delimited(delimited(char('{'), expr, char('}'))),
+        ))
+    ))))(input)
+    .map(|(next_input, (_, condition, true_expression, false_expresion_option))| {
+        return (next_input, Expression::If(Box::new(condition), Box::new(true_expression), false_expresion_option.map(|(_, false_expresion)| Box::new(false_expresion))));
+    })
+}
+
 
 fn term(input: &str) -> IResult<&str, Expression> {
     let (i, init) = factor(input)?;
@@ -347,5 +384,10 @@ mod test {
     #[test]
     fn test_fn_invoke_3() {
         assert_eq!(ex_eval("atan2(1,1)", &HashMap::new()), Ok(0.7853981633974483));
+    }
+
+    #[test]
+    fn test_delimited_with_multi_parentness() {
+        assert_eq!(delimited(char('{'), expr, char('}'))("{if true {1} else{2} }").unwrap().1, Expression::NumLiteral(1.))
     }
 }
