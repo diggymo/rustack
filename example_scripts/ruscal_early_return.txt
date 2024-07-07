@@ -7,3 +7,4 @@ fn early_return(a, b) {
 }
 
 print(early_return(5, 4));
+print(early_return(5, 5));

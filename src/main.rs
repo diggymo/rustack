@@ -3,6 +3,8 @@
 use core::panic;
 use std::collections::HashMap;
 use std::io::Read;
+use std::ops::ControlFlow;
+use std::vec;
 
 use nom::branch::permutation;
 use nom::bytes::complete::tag;
@@ -163,12 +165,17 @@ impl<'src> FnDef<'src> {
                     .zip(args.iter())
                     .map(|(arg, name)| (name.to_string(), *arg))
                     .collect();
-                eval_stmts(stmts, &mut new_stack_frame)
+                // ここで早期リターンを止める
+                match eval_stmts(stmts, &mut new_stack_frame) {
+                    ControlFlow::Break(value) | ControlFlow::Continue(value) => value,
+                }
             }
             Self::Native(NativeFn { code }) => code(called_args),
         }
     }
 }
+
+type EvalResult = ControlFlow<f64, f64>;
 
 struct UserFn<'src> {
     args: Vec<&'src str>,
@@ -298,25 +305,22 @@ fn main() {
     }
 }
 
-fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>) -> f64 {
-    let mut last_value: f64 = 0.;
-    'statement_loop: for statement in stmts {
+fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>) -> EvalResult {
+    let mut last_value = EvalResult::Continue(0.);
+    for statement in stmts {
         match statement {
             Statement::VarDef(identifier, expression) => {
-                let value = eval(expression, stack_frame);
+                let value = eval(expression, stack_frame)?;
                 stack_frame.vars.insert(identifier.to_string(), value);
             }
             Statement::Return(return_expression) => {
-                last_value = eval(return_expression, stack_frame);
-                dbg!("##", &stmts, &return_expression, &last_value);
-                // FIXME: eval_stmtsからbreakするだけでは不足している。さらに親のstmtsでbreakしなければならない
-                break 'statement_loop;
+                return EvalResult::Break(eval(return_expression, stack_frame)?);
             }
             Statement::VarAssign(identifier, expression) => {
                 if !stack_frame.vars.contains_key(*identifier) {
                     panic!("存在していません");
                 }
-                let value = eval(expression, stack_frame);
+                let value = eval(expression, stack_frame)?;
                 stack_frame
                     .vars
                     .insert(identifier.to_string(), value)
@@ -328,8 +332,8 @@ fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>
                 end,
                 stmts: loop_stmts,
             } => {
-                let start_value = eval(start, stack_frame);
-                let end_value = eval(end, stack_frame);
+                let start_value = eval(start, stack_frame)?;
+                let end_value = eval(end, stack_frame)?;
 
                 let mut i = start_value;
                 while i < end_value {
@@ -339,7 +343,7 @@ fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>
                 }
             }
             Statement::Expression(expression) => {
-                last_value = eval(expression, stack_frame);
+                last_value = EvalResult::Continue(eval(expression, stack_frame)?);
             }
             Statement::FnDef { name, args, stms } => {
                 stack_frame.funcs.insert(
@@ -357,36 +361,44 @@ fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>
     last_value
 }
 
-fn eval<'src>(expr: &Expression<'src>, frame: &mut StackFrame<'src>) -> f64 {
-    match expr {
+fn eval<'src>(expr: &Expression<'src>, frame: &mut StackFrame<'src>) -> EvalResult {
+    let result = match expr {
         Expression::Ident("pi") => std::f64::consts::PI,
         Expression::Ident(id) => *frame.get_var(*id),
         Expression::NumLiteral(n) => *n,
-        Expression::Add(lhs, rhs) => eval(lhs, frame) + eval(rhs, frame),
-        Expression::Sub(lhs, rhs) => eval(lhs, frame) - eval(rhs, frame),
-        Expression::Mul(lhs, rhs) => eval(lhs, frame) * eval(rhs, frame),
-        Expression::Div(lhs, rhs) => eval(lhs, frame) / eval(rhs, frame),
+        Expression::Add(lhs, rhs) => eval(lhs, frame)? + eval(rhs, frame)?,
+        Expression::Sub(lhs, rhs) => eval(lhs, frame)? - eval(rhs, frame)?,
+        Expression::Mul(lhs, rhs) => eval(lhs, frame)? * eval(rhs, frame)?,
+        Expression::Div(lhs, rhs) => eval(lhs, frame)? / eval(rhs, frame)?,
         Expression::FnInvoke(name, args) => {
-            let args: Vec<_> = args.into_iter().map(|e| eval(e, frame)).collect();
+            let mut arg_vals = vec![];
+            // NOTE: ControllFlowを早期リターンするため、map関数は利用できない
+            for arg in args.into_iter() {
+                arg_vals.push(eval(arg, frame)?);
+            }
             if let Some(func) = frame.get_fn(*name) {
-                func.call(&args, frame)
+                func.call(&arg_vals, frame)
             } else {
                 panic!("aaa");
             }
         }
         Expression::If(condition_ex, true_ex, false_ex) => {
-            let result = eval(condition_ex, frame);
+            let result = eval(condition_ex, frame)?;
             if result != 0. {
                 println!("##true##");
-                eval_stmts(true_ex, frame)
+                eval_stmts(true_ex, frame)?
             } else {
                 println!("##false##");
-                false_ex.as_ref().map_or(0., |_false_ex| {
-                    return eval_stmts(_false_ex, frame);
-                })
+                if false_ex.as_ref().is_none() {
+                    return EvalResult::Continue(0.);
+                }
+                let _false_ex = false_ex.as_ref().unwrap();
+                return eval_stmts(_false_ex, frame);
             }
         }
-    }
+    };
+
+    return EvalResult::Continue(result);
 }
 
 fn unary_fn<'src>(f: fn(f64) -> f64) -> FnDef<'src> {
@@ -407,11 +419,13 @@ fn binary_fn<'src>(f: fn(f64, f64) -> f64) -> FnDef<'src> {
     })
 }
 
-fn ex_eval<'src>(
-    input: &'src str,
-    frame: &mut StackFrame<'src>,
-) -> Result<f64, nom::Err<nom::error::Error<&'src str>>> {
-    expr(input).map(|(_, e)| eval(&e, frame))
+fn ex_eval<'src>(input: &'src str, frame: &mut StackFrame<'src>) -> EvalResult {
+    let mut last_value = ControlFlow::Continue(0.);
+    for (_, e) in expr(input) {
+        last_value = ControlFlow::Continue(eval(&e, frame)?);
+    }
+
+    return last_value;
 }
 
 /**
@@ -557,18 +571,24 @@ mod test {
 
     #[test]
     fn test_eval_1() {
-        assert_eq!(ex_eval("123", &mut StackFrame::new()), Ok(123.));
+        assert_eq!(
+            ex_eval("123", &mut StackFrame::new()),
+            ControlFlow::Continue(123.)
+        );
     }
     #[test]
     fn test_eval_2() {
         assert_eq!(
             ex_eval("(123 + 456) + pi", &mut StackFrame::new()),
-            Ok(582.1415926535898)
+            ControlFlow::Continue(582.1415926535898)
         );
     }
     #[test]
     fn test_eval_3() {
-        assert_eq!(ex_eval("10 + (100+1)", &mut StackFrame::new()), Ok(111.));
+        assert_eq!(
+            ex_eval("10 + (100+1)", &mut StackFrame::new()),
+            ControlFlow::Continue(111.)
+        );
     }
     #[test]
     fn test_eval_4() {
@@ -596,7 +616,7 @@ mod test {
     fn test_eval_5() {
         assert_eq!(
             ex_eval("2 * pi", &mut StackFrame::new()),
-            Ok(6.283185307179586)
+            ControlFlow::Continue(6.283185307179586)
         );
     }
 
@@ -604,7 +624,7 @@ mod test {
     fn test_eval_6() {
         assert_eq!(
             ex_eval("(123 * 456 ) +pi)", &mut StackFrame::new()),
-            Ok(56091.14159265359)
+            ControlFlow::Continue(56091.14159265359)
         );
     }
 
@@ -612,25 +632,31 @@ mod test {
     fn test_eval_7() {
         assert_eq!(
             ex_eval("10 - ( 100 + 1 )", &mut StackFrame::new()),
-            Ok(-91.)
+            ControlFlow::Continue(-91.)
         );
     }
 
     #[test]
     fn test_eval_8() {
-        assert_eq!(ex_eval("(3+7) /(2+3)", &mut StackFrame::new()), Ok(2.));
+        assert_eq!(
+            ex_eval("(3+7) /(2+3)", &mut StackFrame::new()),
+            ControlFlow::Continue(2.)
+        );
     }
 
     #[test]
     fn test_eval_9() {
-        assert_eq!(ex_eval("2 * 3 / 3", &mut StackFrame::new()), Ok(2.));
+        assert_eq!(
+            ex_eval("2 * 3 / 3", &mut StackFrame::new()),
+            ControlFlow::Continue(2.)
+        );
     }
 
     #[test]
     fn test_fn_invoke_1() {
         assert_eq!(
             ex_eval("sqrt(2) / 2", &mut StackFrame::new()),
-            Ok(0.7071067811865476)
+            ControlFlow::Continue(0.7071067811865476)
         );
     }
 
@@ -638,7 +664,7 @@ mod test {
     fn test_fn_invoke_2() {
         assert_eq!(
             ex_eval("sin(pi / 4)", &mut StackFrame::new()),
-            Ok(0.7071067811865475)
+            ControlFlow::Continue(0.7071067811865475)
         );
     }
 
@@ -646,7 +672,7 @@ mod test {
     fn test_fn_invoke_3() {
         assert_eq!(
             ex_eval("atan2(1,1)", &mut StackFrame::new()),
-            Ok(0.7853981633974483)
+            ControlFlow::Continue(0.7853981633974483)
         );
     }
 
@@ -695,7 +721,7 @@ mod test {
     fn test_if_false() {
         assert_eq!(
             eval(&expr("if 0 {5;}").unwrap().1, &mut StackFrame::new()),
-            0.
+            ControlFlow::Continue(0.)
         );
     }
 
@@ -708,7 +734,7 @@ mod test {
                     .1,
                 &mut StackFrame::new()
             ),
-            2.
+            ControlFlow::Continue(2.)
         );
     }
 
@@ -721,7 +747,7 @@ mod test {
                     .1,
                 &mut StackFrame::new()
             ),
-            4.
+            ControlFlow::Continue(4.)
         );
     }
 
@@ -734,7 +760,7 @@ mod test {
                     .1,
                 &mut StackFrame::new()
             ),
-            5.
+            ControlFlow::Continue(5.)
         );
     }
 
@@ -747,7 +773,7 @@ mod test {
                     .1,
                 &mut StackFrame::new()
             ),
-            5.
+            ControlFlow::Continue(5.)
         );
     }
 
@@ -760,7 +786,7 @@ mod test {
                     .1,
                 &mut StackFrame::new()
             ),
-            1.
+            ControlFlow::Continue(1.)
         );
     }
 }
