@@ -1,11 +1,12 @@
 // fn recognizer(input: &str) -> &str;
-
 use core::panic;
+use log::{debug, info};
 use std::collections::HashMap;
 use std::io::Read;
 use std::ops::ControlFlow;
 use std::vec;
 
+use env_logger;
 use nom::branch::permutation;
 use nom::bytes::complete::tag;
 use nom::character::complete::{alpha1, alphanumeric1, char, space0, space1};
@@ -103,7 +104,7 @@ impl<'src> StackFrame<'src> {
 }
 
 fn _print(a: f64) -> f64 {
-    println!("{a}");
+    println!("print: {a}");
     a
 }
 
@@ -121,6 +122,8 @@ enum Expression<'src> {
         Box<Statements<'src>>,
         Option<Box<Statements<'src>>>,
     ),
+    Lt(Box<Expression<'src>>, Box<Expression<'src>>),
+    Gt(Box<Expression<'src>>, Box<Expression<'src>>),
 }
 
 type Statements<'a> = Vec<Statement<'a>>;
@@ -148,6 +151,8 @@ enum Statement<'src> {
         stms: Statements<'src>,
     },
     Return(Expression<'src>),
+    Continue,
+    Break,
 }
 
 enum FnDef<'src> {
@@ -167,7 +172,13 @@ impl<'src> FnDef<'src> {
                     .collect();
                 // ここで早期リターンを止める
                 match eval_stmts(stmts, &mut new_stack_frame) {
-                    ControlFlow::Break(value) | ControlFlow::Continue(value) => value,
+                    ControlFlow::Continue(value) => value,
+                    ControlFlow::Break(break_result) => match break_result {
+                        BreakResult::Return(value) => value,
+                        BreakResult::Continue | BreakResult::Break => {
+                            panic!("can't break or continue in function")
+                        }
+                    },
                 }
             }
             Self::Native(NativeFn { code }) => code(called_args),
@@ -175,7 +186,14 @@ impl<'src> FnDef<'src> {
     }
 }
 
-type EvalResult = ControlFlow<f64, f64>;
+type EvalResult = ControlFlow<BreakResult, f64>;
+
+#[derive(Debug, PartialEq, PartialOrd)]
+enum BreakResult {
+    Return(f64),
+    Break,
+    Continue,
+}
 
 struct UserFn<'src> {
     args: Vec<&'src str>,
@@ -195,10 +213,23 @@ fn statements(input: &str) -> IResult<&str, Statements> {
 fn statement(input: &str) -> IResult<&str, Statement> {
     alt((
         for_statement,
+        continue_statement,
+        break_statement,
         fn_def_statement,
         return_statement,
         terminated(alt((var_def, var_assign, expr_statement)), char(';')),
     ))(input)
+}
+
+fn continue_statement(input: &str) -> IResult<&str, Statement> {
+    let (next_input, _) = space_delimited(tag("continue"))(input)?;
+    info!("continue_statement success {:?}", &input);
+    return Ok((next_input, Statement::Continue));
+}
+fn break_statement(input: &str) -> IResult<&str, Statement> {
+    let (next_input, _) = space_delimited(tag("break"))(input)?;
+    info!("break_statement success {:?}", &input);
+    return Ok((next_input, Statement::Break));
 }
 
 fn return_statement(input: &str) -> IResult<&str, Statement> {
@@ -208,15 +239,14 @@ fn return_statement(input: &str) -> IResult<&str, Statement> {
         space_delimited(char(';')),
     ))(input)?;
 
+    info!("return_statement success {:?}", &input);
     return Ok((next_input, Statement::Return(expression)));
 }
 
 fn for_statement(input: &str) -> IResult<&str, Statement> {
     let (input, _) = space_delimited(tag("for"))(input)?;
-    println!("#");
     let (input, (_, loop_identifier, _, _, start_expr, _, end_expr)) =
         permutation((space0, identifier, space1, tag("in"), expr, tag("to"), expr))(input)?;
-    println!("##");
 
     let (input, statement_vec) = delimited(
         space_delimited(char('{')),
@@ -224,6 +254,7 @@ fn for_statement(input: &str) -> IResult<&str, Statement> {
         space_delimited(char('}')),
     )(input)?;
 
+    info!("for_statement success {:?}", &input);
     return Ok((
         input,
         Statement::For {
@@ -253,6 +284,7 @@ fn fn_def_statement(input: &str) -> IResult<&str, Statement> {
         space_delimited(char('}')),
     )(input)?;
 
+    info!("fn_def_statement success {:?}", &input);
     Ok((
         input,
         Statement::FnDef {
@@ -270,7 +302,10 @@ fn var_def(input: &str) -> IResult<&str, Statement> {
         space_delimited(char('=')),
         space_delimited(expr),
     ))(input)
-    .map(|(next_input, parsed)| (next_input, Statement::VarDef(parsed.1, parsed.3)))
+    .map(|(next_input, parsed)| {
+        info!("var_def success {:?}", &input);
+        (next_input, Statement::VarDef(parsed.1, parsed.3))
+    })
 }
 
 fn var_assign(input: &str) -> IResult<&str, Statement> {
@@ -279,16 +314,21 @@ fn var_assign(input: &str) -> IResult<&str, Statement> {
         space_delimited(char('=')),
         space_delimited(expr),
     ))(input)
-    .map(|(next_input, parsed)| (next_input, Statement::VarAssign(parsed.0, parsed.2)))
+    .map(|(next_input, parsed)| {
+        info!("var_assign success {:?}", &input);
+        (next_input, Statement::VarAssign(parsed.0, parsed.2))
+    })
 }
 
 fn expr_statement(input: &str) -> IResult<&str, Statement> {
     expr(input).map(|(next_input, parsed_expression)| {
+        info!("expr_statement success {:?}", &input);
         (next_input, Statement::Expression(parsed_expression))
     })
 }
 
 fn main() {
+    env_logger::init();
     let mut buf = String::new();
 
     let mut stack_frame = StackFrame::new();
@@ -300,7 +340,7 @@ fn main() {
                 return;
             }
         };
-        dbg!(&parsed_statements);
+        info!("parsed => {:?}", &parsed_statements);
         eval_stmts(&parsed_statements, &mut stack_frame);
     }
 }
@@ -314,7 +354,10 @@ fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>
                 stack_frame.vars.insert(identifier.to_string(), value);
             }
             Statement::Return(return_expression) => {
-                return EvalResult::Break(eval(return_expression, stack_frame)?);
+                return EvalResult::Break(BreakResult::Return(eval(
+                    return_expression,
+                    stack_frame,
+                )?));
             }
             Statement::VarAssign(identifier, expression) => {
                 if !stack_frame.vars.contains_key(*identifier) {
@@ -336,9 +379,24 @@ fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>
                 let end_value = eval(end, stack_frame)?;
 
                 let mut i = start_value;
-                while i < end_value {
+                'for_loop: while i < end_value {
                     stack_frame.vars.insert(loop_var.to_string(), i);
-                    eval_stmts(loop_stmts, stack_frame);
+                    match eval_stmts(loop_stmts, stack_frame) {
+                        // そのまま次に
+                        ControlFlow::Continue(_) => {}
+                        // 関数呼び出しまで戻す=return
+                        ControlFlow::Break(BreakResult::Return(value)) => {
+                            return ControlFlow::Break(BreakResult::Return(value));
+                        }
+                        // forを抜ける
+                        ControlFlow::Break(BreakResult::Break) => {
+                            break 'for_loop;
+                        }
+                        // for1回分をスキップする
+                        ControlFlow::Break(BreakResult::Continue) => {
+                            // 実質何もしなくて良い（すでにスキップされているので）
+                        }
+                    };
                     i += 1.;
                 }
             }
@@ -354,10 +412,12 @@ fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>
                     }),
                 );
             }
+            Statement::Continue => return EvalResult::Break(BreakResult::Continue),
+            Statement::Break => return EvalResult::Break(BreakResult::Break),
         }
     }
 
-    dbg!(&last_value);
+    info!("return eval stmts {:?}", &last_value);
     last_value
 }
 
@@ -380,6 +440,20 @@ fn eval<'src>(expr: &Expression<'src>, frame: &mut StackFrame<'src>) -> EvalResu
                 func.call(&arg_vals, frame)
             } else {
                 panic!("aaa");
+            }
+        }
+        Expression::Gt(lhs, rhs) => {
+            if eval(lhs, frame)? > eval(rhs, frame)? {
+                1.
+            } else {
+                0.
+            }
+        }
+        Expression::Lt(lhs, rhs) => {
+            if eval(lhs, frame)? < eval(rhs, frame)? {
+                1.
+            } else {
+                0.
             }
         }
         Expression::If(condition_ex, true_ex, false_ex) => {
@@ -447,7 +521,7 @@ fn num_expr(input: &str) -> IResult<&str, Expression> {
 }
 
 fn expr(input: &str) -> IResult<&str, Expression> {
-    alt((if_expr, num_expr))(input)
+    alt((if_expr, cond_expr, num_expr))(input)
 }
 
 fn if_expr(input: &str) -> IResult<&str, Expression> {
@@ -462,6 +536,7 @@ fn if_expr(input: &str) -> IResult<&str, Expression> {
     ))(next_input)
     .map(
         |(next_input, (condition, true_expression, false_expresion_option))| {
+            info!("if_expr success, {input}");
             return (
                 next_input,
                 Expression::If(
@@ -472,6 +547,20 @@ fn if_expr(input: &str) -> IResult<&str, Expression> {
             );
         },
     )
+}
+
+fn cond_expr(i: &str) -> IResult<&str, Expression> {
+    let (i, first) = num_expr(i)?;
+    let (i, cond) = space_delimited(alt((char('<'), char('>'))))(i)?;
+    let (i, second) = num_expr(i)?;
+    Ok((
+        i,
+        match cond {
+            '<' => Expression::Lt(Box::new(first), Box::new(second)),
+            '>' => Expression::Gt(Box::new(first), Box::new(second)),
+            _ => unreachable!(),
+        },
+    ))
 }
 
 fn term(input: &str) -> IResult<&str, Expression> {
@@ -594,7 +683,7 @@ mod test {
     fn test_eval_4() {
         assert_eq!(
             ex_eval("((1+2)+(3+4))+5+6", &mut StackFrame::new()),
-            Ok(21.)
+            ControlFlow::Continue(21.)
         );
     }
 
@@ -713,7 +802,7 @@ mod test {
     fn test_if_true() {
         assert_eq!(
             eval(&expr("if 1 {5;}").unwrap().1, &mut StackFrame::new()),
-            5.
+            ControlFlow::Continue(5.)
         );
     }
 
@@ -784,6 +873,22 @@ mod test {
                 &statements("var a = 1;var hoge = if 1 {print(a+1);};print(a);")
                     .unwrap()
                     .1,
+                &mut StackFrame::new()
+            ),
+            ControlFlow::Continue(1.)
+        );
+    }
+
+    #[test]
+    fn test_for_double() {
+        // dbg!(statements("for i in 0 to 3 { for j in 0 to 3 { if j-2 {print(555);};  print(j); } }").unwrap());
+        assert_eq!(
+            eval_stmts(
+                &statements(
+                    "for i in 0 to 3 { for j in 0 to 3 { if j-2 {print(555);};  print(j); } }"
+                )
+                .unwrap()
+                .1,
                 &mut StackFrame::new()
             ),
             ControlFlow::Continue(1.)
