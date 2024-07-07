@@ -221,7 +221,7 @@ fn _print(a: &[Value]) -> Value {
 }
 
 fn p_dbg(a: &[Value]) -> Value {
-    println!("debug: {:?}", a[0]);
+    println!("debug: {:#?}", a[0]);
     Value::I64(0)
 }
 
@@ -341,12 +341,12 @@ fn statement(input: &str) -> IResult<&str, Statement> {
 
 fn continue_statement(input: &str) -> IResult<&str, Statement> {
     let (next_input, _) = space_delimited(tag("continue"))(input)?;
-    info!("continue_statement success, [{:?}]", &input);
+    info!("continue_statement success, [{:#?}]", &input);
     return Ok((next_input, Statement::Continue));
 }
 fn break_statement(input: &str) -> IResult<&str, Statement> {
     let (next_input, _) = space_delimited(tag("break"))(input)?;
-    info!("break_statement success, [{:?}]", &input);
+    info!("break_statement success, [{:#?}]", &input);
     return Ok((next_input, Statement::Break));
 }
 
@@ -357,7 +357,7 @@ fn return_statement(input: &str) -> IResult<&str, Statement> {
         space_delimited(char(';')),
     ))(input)?;
 
-    info!("return_statement success, [{:?}]", &input);
+    info!("return_statement success, [{:#?}]", &input);
     return Ok((next_input, Statement::Return(expression)));
 }
 
@@ -372,7 +372,7 @@ fn for_statement(input: &str) -> IResult<&str, Statement> {
         space_delimited(char('}')),
     )(input)?;
 
-    info!("for_statement success, [{:?}]", &input);
+    info!("for_statement success, [{:#?}]", &input);
     return Ok((
         input,
         Statement::For {
@@ -402,7 +402,7 @@ fn fn_def_statement(input: &str) -> IResult<&str, Statement> {
         space_delimited(char('}')),
     )(input)?;
 
-    info!("fn_def_statement success, [{:?}]", &input);
+    info!("fn_def_statement success, [{:#?}]", &input);
     Ok((
         input,
         Statement::FnDef {
@@ -421,7 +421,7 @@ fn var_def(input: &str) -> IResult<&str, Statement> {
         space_delimited(expr),
     ))(input)
     .map(|(next_input, parsed)| {
-        info!("var_def success, [{:?}]", &input);
+        info!("var_def success, [{:#?}]", &input);
         (next_input, Statement::VarDef(parsed.1, parsed.3))
     })
 }
@@ -433,14 +433,14 @@ fn var_assign(input: &str) -> IResult<&str, Statement> {
         space_delimited(expr),
     ))(input)
     .map(|(next_input, parsed)| {
-        info!("var_assign success, [{:?}]", &input);
+        info!("var_assign success, [{:#?}]", &input);
         (next_input, Statement::VarAssign(parsed.0, parsed.2))
     })
 }
 
 fn expr_statement(input: &str) -> IResult<&str, Statement> {
     expr(input).map(|(next_input, parsed_expression)| {
-        info!("expr_statement success, [{:?}]", &input);
+        info!("expr_statement success, [{:#?}]", &input);
         (next_input, Statement::Expression(parsed_expression))
     })
 }
@@ -458,7 +458,7 @@ fn main() {
                 return;
             }
         };
-        info!("parsed => {:?}", &parsed_statements);
+        info!("parsed => {:#?}", &parsed_statements);
         eval_stmts(&parsed_statements, &mut stack_frame);
     }
 }
@@ -541,7 +541,7 @@ fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>
         }
     }
 
-    info!("return eval stmts {:?}", &last_value);
+    info!("return eval stmts {:#?}", &last_value);
     last_value
 }
 
@@ -720,7 +720,7 @@ fn if_expr(input: &str) -> IResult<&str, Expression> {
     ))(next_input)
     .map(
         |(next_input, (condition, true_expression, false_expresion_option))| {
-            info!("if_expr success, [{:?}]", &input);
+            info!("if_expr success, [{:#?}]", &input);
             return (
                 next_input,
                 Expression::If(
