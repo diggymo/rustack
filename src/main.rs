@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::ops::ControlFlow;
 use std::vec;
+use tracing::{info_span, instrument};
+use tracing_chrome::ChromeLayerBuilder;
+use tracing_subscriber::EnvFilter;
 
 use env_logger;
 use nom::branch::permutation;
@@ -41,10 +44,14 @@ pub struct TypeCheckContext<'src> {
 
 impl<'src> TypeCheckContext<'src> {
     pub fn new() -> Self {
-        Self { vars: HashMap::new(), funcs: HashMap::new(), super_context: None }
+        Self {
+            vars: HashMap::new(),
+            funcs: HashMap::new(),
+            super_context: None,
+        }
     }
 
-    fn get_var(&self, name: &str)-> Option<TypeDecl> {
+    fn get_var(&self, name: &str) -> Option<TypeDecl> {
         if let Some(var) = self.vars.get(name) {
             return Some(var.clone());
         }
@@ -70,13 +77,30 @@ impl<'src> TypeCheckContext<'src> {
 }
 
 // fn tc_expr<'src>(e: Expression<'src>, ctx: &mut TypeCheckContext<'src>) -> Result<TypeDecl, TypeCheckError> {
+//     use Expression::*;
 
+//     Ok(match e {
+//         NumLiteral(_) => TypeDecl::F64,
+//         StrLiteral(_) => TypeDecl::Str,
+//         Ident(name) => ctx.get_var(name).ok_or_else(|| {
+//             TypeCheckError::new(format!("Variable {:?} not found in scope...", name))
+//         })?,
+//         // TODO: コピペしないと...
+//         // https://github.com/msakuta/ruscal/blob/master/examples/20-type-check.rs
+//         Add(_, _) => todo!(),
+//         Sub(_, _) => todo!(),
+//         Mul(_, _) => todo!(),
+//         Div(_, _) => todo!(),
+//         FnInvoke(_, _) => todo!(),
+//         If(_, _, _) => todo!(),
+//         Lt(_, _) => todo!(),
+//         Gt(_, _) => todo!(),
+//     })
 // }
-
 
 #[derive(Debug)]
 pub struct TypeCheckError {
-    msg: String
+    msg: String,
 }
 
 impl std::fmt::Display for TypeCheckError {
@@ -90,7 +114,6 @@ impl TypeCheckError {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq)]
 enum Value {
     F64(f64),
@@ -103,24 +126,24 @@ pub enum TypeDecl {
     Any,
     F64,
     I64,
-    Str
+    Str,
 }
 
-fn tc_coerce_type<'src>(
-    value: &TypeDecl,
-    target: &TypeDecl
-) -> Result<TypeDecl, TypeCheckError>{
+fn tc_coerce_type<'src>(value: &TypeDecl, target: &TypeDecl) -> Result<TypeDecl, TypeCheckError> {
     use TypeDecl::*;
 
     Ok(match (value, target) {
         (_, Any) => value.clone(),
         (Any, _) => target.clone(),
-        (F64|I64, F64) => F64,
+        (F64 | I64, F64) => F64,
         (F64, I64) => F64,
         (I64, I64) => I64,
         (Str, Str) => Str,
         _ => {
-            return Err(TypeCheckError::new(format!("TypeCheckError! {:?} cannot be assigned to {:?}", value, target)))
+            return Err(TypeCheckError::new(format!(
+                "TypeCheckError! {:?} cannot be assigned to {:?}",
+                value, target
+            )))
         }
     })
 }
@@ -378,7 +401,11 @@ enum FnDef<'src> {
 impl<'src> FnDef<'src> {
     pub fn call(&self, called_args: &[Value], frame: &StackFrame) -> Value {
         match self {
-            Self::User(UserFn { args, return_type, stmts }) => {
+            Self::User(UserFn {
+                args,
+                return_type,
+                stmts,
+            }) => {
                 let mut new_stack_frame = StackFrame::push_stack(frame);
                 new_stack_frame.vars = called_args
                     .iter()
@@ -396,7 +423,11 @@ impl<'src> FnDef<'src> {
                     },
                 }
             }
-            Self::Native(NativeFn { code, args, return_type }) => code(called_args),
+            Self::Native(NativeFn {
+                code,
+                args,
+                return_type,
+            }) => code(called_args),
         }
     }
 }
@@ -421,6 +452,7 @@ struct NativeFn<'src> {
     code: Box<dyn Fn(&[Value]) -> Value>,
 }
 
+#[instrument]
 fn statements(input: &str) -> IResult<&str, Statements> {
     let (input, stmts) = many0(statement)(input)?;
     // NOTE: 必要？
@@ -428,6 +460,7 @@ fn statements(input: &str) -> IResult<&str, Statements> {
     Ok((input, stmts))
 }
 
+#[instrument]
 fn statement(input: &str) -> IResult<&str, Statement> {
     alt((
         for_statement,
@@ -439,17 +472,21 @@ fn statement(input: &str) -> IResult<&str, Statement> {
     ))(input)
 }
 
+#[instrument]
 fn continue_statement(input: &str) -> IResult<&str, Statement> {
     let (next_input, _) = space_delimited(tag("continue"))(input)?;
     info!("continue_statement success, [{:#?}]", &input);
     return Ok((next_input, Statement::Continue));
 }
+
+#[instrument]
 fn break_statement(input: &str) -> IResult<&str, Statement> {
     let (next_input, _) = space_delimited(tag("break"))(input)?;
     info!("break_statement success, [{:#?}]", &input);
     return Ok((next_input, Statement::Break));
 }
 
+#[instrument]
 fn return_statement(input: &str) -> IResult<&str, Statement> {
     let (next_input, (_, expression, _)) = permutation((
         space_delimited(tag("return")),
@@ -461,6 +498,7 @@ fn return_statement(input: &str) -> IResult<&str, Statement> {
     return Ok((next_input, Statement::Return(expression)));
 }
 
+#[instrument]
 fn for_statement(input: &str) -> IResult<&str, Statement> {
     let (input, _) = space_delimited(tag("for"))(input)?;
     let (input, (_, loop_identifier, _, _, start_expr, _, end_expr)) =
@@ -484,6 +522,7 @@ fn for_statement(input: &str) -> IResult<&str, Statement> {
     ));
 }
 
+#[instrument]
 fn fn_def_statement(input: &str) -> IResult<&str, Statement> {
     let (input, _) = space_delimited(tag("fn"))(input)?;
 
@@ -491,11 +530,14 @@ fn fn_def_statement(input: &str) -> IResult<&str, Statement> {
         space_delimited(identifier),
         delimited(
             char('('),
-            separated_list0(char(','), permutation((
-                space_delimited(identifier),
-                space_delimited(char(':')),
-                space_delimited(type_def_statement),
-            ))),
+            separated_list0(
+                char(','),
+                permutation((
+                    space_delimited(identifier),
+                    space_delimited(char(':')),
+                    space_delimited(type_def_statement),
+                )),
+            ),
             char(')'),
         ),
     ))(input)?;
@@ -514,13 +556,17 @@ fn fn_def_statement(input: &str) -> IResult<&str, Statement> {
         input,
         Statement::FnDef {
             name: fn_name,
-            args: args.into_iter().map(|(_identifier, _,_typedef)| (_identifier, _typedef)).collect(),
+            args: args
+                .into_iter()
+                .map(|(_identifier, _, _typedef)| (_identifier, _typedef))
+                .collect(),
             return_type: return_type,
             stms: statements,
         },
     ))
 }
 
+#[instrument]
 fn var_def(input: &str) -> IResult<&str, Statement> {
     permutation((
         space_delimited(tag("var")),
@@ -532,20 +578,25 @@ fn var_def(input: &str) -> IResult<&str, Statement> {
     ))(input)
     .map(|(next_input, parsed)| {
         info!("var_def success, [{:#?}]", &input);
-        (next_input, Statement::VarDef(parsed.1, parsed.3,parsed.5))
+        (next_input, Statement::VarDef(parsed.1, parsed.3, parsed.5))
     })
 }
 
+#[instrument]
 fn type_def_statement(input: &str) -> IResult<&str, TypeDecl> {
-    let (input, type_def, ) = alt((tag("str"), tag("f64"), tag("i64")))(input)?;
-    Ok((input, match type_def {
-        "str" => TypeDecl::Str,
-        "f64" => TypeDecl::F64,
-        "i64" => TypeDecl::I64,
-        _ => panic!("Type annotation has unknown type {:?}", type_def)
-    }))
+    let (input, type_def) = alt((tag("str"), tag("f64"), tag("i64")))(input)?;
+    Ok((
+        input,
+        match type_def {
+            "str" => TypeDecl::Str,
+            "f64" => TypeDecl::F64,
+            "i64" => TypeDecl::I64,
+            _ => panic!("Type annotation has unknown type {:?}", type_def),
+        },
+    ))
 }
 
+#[instrument]
 fn var_assign(input: &str) -> IResult<&str, Statement> {
     permutation((
         space_delimited(identifier),
@@ -558,18 +609,27 @@ fn var_assign(input: &str) -> IResult<&str, Statement> {
     })
 }
 
+#[instrument]
 fn expr_statement(input: &str) -> IResult<&str, Statement> {
     expr(input).map(|(next_input, parsed_expression)| {
         info!("expr_statement success, [{:#?}]", &input);
         (next_input, Statement::Expression(parsed_expression))
     })
 }
+use tracing_subscriber::fmt;
+use tracing_subscriber::{prelude::*, registry::Registry};
 
 fn main() {
-    env_logger::init();
+    // env_logger::init();
+    // let (chrome_layer, _guard) = ChromeLayerBuilder::new().build();
+    // tracing_subscriber::registry().with(fmt::Layer::default()).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
     let mut buf = String::new();
 
-    let mut stack_frame = StackFrame::new();
+    let mut stack_frame: StackFrame<'_> = StackFrame::new();
     if std::io::stdin().read_to_string(&mut buf).is_ok() {
         let parsed_statements = match statements(&buf) {
             Ok((_, parsed_statements)) => parsed_statements,
@@ -584,86 +644,93 @@ fn main() {
 }
 
 fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>) -> EvalResult {
-    let mut last_value = EvalResult::Continue(Value::I64(0));
-    for statement in stmts {
-        match statement {
-            Statement::VarDef(identifier,_, expression) => {
-                let value = eval(expression, stack_frame)?;
-                stack_frame.vars.insert(identifier.to_string(), value);
-            }
-            Statement::Return(return_expression) => {
-                return EvalResult::Break(BreakResult::Return(eval(
-                    return_expression,
-                    stack_frame,
-                )?));
-            }
-            Statement::VarAssign(identifier, expression) => {
-                if !stack_frame.vars.contains_key(*identifier) {
-                    panic!("存在していません");
+    info_span!("eval_stmts").in_scope(|| {
+        let mut last_value = EvalResult::Continue(Value::I64(0));
+        for statement in stmts {
+            match statement {
+                Statement::VarDef(identifier, _, expression) => {
+                    let value = eval(expression, stack_frame)?;
+                    stack_frame.vars.insert(identifier.to_string(), value);
                 }
-                let value = eval(expression, stack_frame)?;
-                stack_frame
-                    .vars
-                    .insert(identifier.to_string(), value)
-                    .unwrap();
-            }
-            Statement::For {
-                loop_var,
-                start,
-                end,
-                stmts: loop_stmts,
-            } => {
-                let start_value = eval(start, stack_frame)?;
-                let end_value = eval(end, stack_frame)?;
+                Statement::Return(return_expression) => {
+                    return EvalResult::Break(BreakResult::Return(eval(
+                        return_expression,
+                        stack_frame,
+                    )?));
+                }
+                Statement::VarAssign(identifier, expression) => {
+                    if !stack_frame.vars.contains_key(*identifier) {
+                        panic!("存在していません");
+                    }
+                    let value = eval(expression, stack_frame)?;
+                    stack_frame
+                        .vars
+                        .insert(identifier.to_string(), value)
+                        .unwrap();
+                }
+                Statement::For {
+                    loop_var,
+                    start,
+                    end,
+                    stmts: loop_stmts,
+                } => {
+                    let start_value = eval(start, stack_frame)?;
+                    let end_value = eval(end, stack_frame)?;
 
-                let (start_i64, end_i64) = match (start_value, end_value) {
-                    (Value::Str(_), _) => panic!("#"),
-                    (_, Value::Str(_)) => panic!("#"),
-                    (a, b) => (a.as_i64().unwrap(), b.as_i64().unwrap()),
-                };
-
-                let mut i = start_i64;
-                'for_loop: while i < end_i64 {
-                    stack_frame.vars.insert(loop_var.to_string(), Value::I64(i));
-                    match eval_stmts(loop_stmts, stack_frame) {
-                        // そのまま次に
-                        ControlFlow::Continue(_) => {}
-                        // 関数呼び出しまで戻す=return
-                        ControlFlow::Break(BreakResult::Return(value)) => {
-                            return ControlFlow::Break(BreakResult::Return(value));
-                        }
-                        // forを抜ける
-                        ControlFlow::Break(BreakResult::Break) => {
-                            break 'for_loop;
-                        }
-                        // for1回分をスキップする
-                        ControlFlow::Break(BreakResult::Continue) => {
-                            // 実質何もしなくて良い（すでにスキップされているので）
-                        }
+                    let (start_i64, end_i64) = match (start_value, end_value) {
+                        (Value::Str(_), _) => panic!("#"),
+                        (_, Value::Str(_)) => panic!("#"),
+                        (a, b) => (a.as_i64().unwrap(), b.as_i64().unwrap()),
                     };
-                    i += 1;
-                }
-            }
-            Statement::Expression(expression) => {
-                last_value = EvalResult::Continue(eval(expression, stack_frame)?);
-            }
-            Statement::FnDef { name, args,return_type, stms } => {
-                stack_frame.funcs.insert(
-                    name.to_string(),
-                    FnDef::User(UserFn {
-                        args: args.clone(),
-                        return_type: return_type.clone(),
-                        stmts: stms.clone(),
-                    }),
-                );
-            }
-            Statement::Continue => return EvalResult::Break(BreakResult::Continue),
-            Statement::Break => return EvalResult::Break(BreakResult::Break),
-        }
-    }
 
-    info!("return eval stmts {:#?}", &last_value);
-    last_value
+                    let mut i = start_i64;
+                    'for_loop: while i < end_i64 {
+                        stack_frame.vars.insert(loop_var.to_string(), Value::I64(i));
+                        match eval_stmts(loop_stmts, stack_frame) {
+                            // そのまま次に
+                            ControlFlow::Continue(_) => {}
+                            // 関数呼び出しまで戻す=return
+                            ControlFlow::Break(BreakResult::Return(value)) => {
+                                return ControlFlow::Break(BreakResult::Return(value));
+                            }
+                            // forを抜ける
+                            ControlFlow::Break(BreakResult::Break) => {
+                                break 'for_loop;
+                            }
+                            // for1回分をスキップする
+                            ControlFlow::Break(BreakResult::Continue) => {
+                                // 実質何もしなくて良い（すでにスキップされているので）
+                            }
+                        };
+                        i += 1;
+                    }
+                }
+                Statement::Expression(expression) => {
+                    last_value = EvalResult::Continue(eval(expression, stack_frame)?);
+                }
+                Statement::FnDef {
+                    name,
+                    args,
+                    return_type,
+                    stms,
+                } => {
+                    stack_frame.funcs.insert(
+                        name.to_string(),
+                        FnDef::User(UserFn {
+                            args: args.clone(),
+                            return_type: return_type.clone(),
+                            stmts: stms.clone(),
+                        }),
+                    );
+                }
+                Statement::Continue => return EvalResult::Break(BreakResult::Continue),
+                Statement::Break => return EvalResult::Break(BreakResult::Break),
+            }
+        }
+
+        info!("return eval stmts {:#?}", &last_value);
+        last_value
+    })
 }
 
 fn eval<'src>(expr: &Expression<'src>, frame: &mut StackFrame<'src>) -> EvalResult {
@@ -734,7 +801,7 @@ fn unary_fn<'src>(f: fn(f64) -> f64) -> FnDef<'src> {
 
 fn binary_fn<'src>(f: fn(f64, f64) -> f64) -> FnDef<'src> {
     FnDef::Native(NativeFn {
-        args: vec![("a", TypeDecl::F64),("b", TypeDecl::F64)],
+        args: vec![("a", TypeDecl::F64), ("b", TypeDecl::F64)],
         return_type: TypeDecl::F64,
         code: Box::new(move |args| {
             let mut iter = args.into_iter();
