@@ -1,7 +1,6 @@
 // fn recognizer(input: &str) -> &str;
 use core::panic;
 use log::{debug, info};
-use nom::Err;
 use std::collections::HashMap;
 use std::io::Read;
 use std::ops::ControlFlow;
@@ -33,96 +32,11 @@ struct StackFrame<'src> {
     uplevel: Option<&'src StackFrame<'src>>,
 }
 
-pub struct TypeCheckContext<'src> {
-    vars: HashMap<&'src str, TypeDecl>,
-    funcs: HashMap<&'src str, FnDef<'src>>,
-    super_context: Option<&'src TypeCheckContext<'src>>,
-}
-
-impl<'src> TypeCheckContext<'src> {
-    pub fn new() -> Self {
-        Self { vars: HashMap::new(), funcs: HashMap::new(), super_context: None }
-    }
-
-    fn get_var(&self, name: &str)-> Option<TypeDecl> {
-        if let Some(var) = self.vars.get(name) {
-            return Some(var.clone());
-        }
-
-        if let Some(super_context) = self.super_context {
-            return super_context.get_var(name);
-        }
-
-        None
-    }
-
-    fn get_fn(&self, name: &str) -> Option<&FnDef<'src>> {
-        if let Some(var) = self.funcs.get(name) {
-            return Some(var);
-        }
-
-        if let Some(super_context) = self.super_context {
-            return super_context.get_fn(name);
-        }
-
-        None
-    }
-}
-
-// fn tc_expr<'src>(e: Expression<'src>, ctx: &mut TypeCheckContext<'src>) -> Result<TypeDecl, TypeCheckError> {
-
-// }
-
-
-#[derive(Debug)]
-pub struct TypeCheckError {
-    msg: String
-}
-
-impl std::fmt::Display for TypeCheckError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.msg)
-    }
-}
-impl TypeCheckError {
-    fn new(msg: String) -> Self {
-        Self { msg }
-    }
-}
-
-
 #[derive(Debug, Clone, PartialEq)]
 enum Value {
     F64(f64),
     I64(i64),
     Str(String),
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum TypeDecl {
-    Any,
-    F64,
-    I64,
-    Str
-}
-
-fn tc_coerce_type<'src>(
-    value: &TypeDecl,
-    target: &TypeDecl
-) -> Result<TypeDecl, TypeCheckError>{
-    use TypeDecl::*;
-
-    Ok(match (value, target) {
-        (_, Any) => value.clone(),
-        (Any, _) => target.clone(),
-        (F64|I64, F64) => F64,
-        (F64, I64) => F64,
-        (I64, I64) => I64,
-        (Str, Str) => Str,
-        _ => {
-            return Err(TypeCheckError::new(format!("TypeCheckError! {:?} cannot be assigned to {:?}", value, target)))
-        }
-    })
 }
 
 impl std::fmt::Display for Value {
@@ -227,40 +141,30 @@ impl<'src> StackFrame<'src> {
         funcs.insert(
             "dbg".to_string(),
             FnDef::Native(NativeFn {
-                args: vec![("hoge", TypeDecl::Any)],
-                return_type: TypeDecl::Any,
                 code: Box::new(p_dbg),
             }),
         );
         funcs.insert(
             "print".to_string(),
             FnDef::Native(NativeFn {
-                args: vec![("hoge", TypeDecl::Any)],
-                return_type: TypeDecl::Any,
                 code: Box::new(_print),
             }),
         );
         funcs.insert(
             "i64".to_string(),
             FnDef::Native(NativeFn {
-                args: vec![("hoge", TypeDecl::F64)],
-                return_type: TypeDecl::I64,
                 code: Box::new(move |args| Value::I64(args.first().unwrap().as_i64().unwrap())),
             }),
         );
         funcs.insert(
             "f64".to_string(),
             FnDef::Native(NativeFn {
-                args: vec![("hoge", TypeDecl::I64)],
-                return_type: TypeDecl::F64,
                 code: Box::new(move |args| Value::F64(coerce_f64(args.first().unwrap()))),
             }),
         );
         funcs.insert(
             "str".to_string(),
             FnDef::Native(NativeFn {
-                args: vec![("hoge", TypeDecl::Any)],
-                return_type: TypeDecl::Str,
                 code: Box::new(move |args| Value::Str(coerce_str(args.first().unwrap()))),
             }),
         );
@@ -348,7 +252,7 @@ enum Statement<'src> {
     // `get_value();` や `register_user(name);`など
     Expression(Expression<'src>),
     // 変数宣言
-    VarDef(&'src str, TypeDecl, Expression<'src>),
+    VarDef(&'src str, Expression<'src>),
     // 変数代入
     VarAssign(&'src str, Expression<'src>),
 
@@ -361,8 +265,7 @@ enum Statement<'src> {
 
     FnDef {
         name: &'src str,
-        args: Vec<(&'src str, TypeDecl)>,
-        return_type: TypeDecl,
+        args: Vec<&'src str>,
         stms: Statements<'src>,
     },
     Return(Expression<'src>),
@@ -372,18 +275,18 @@ enum Statement<'src> {
 
 enum FnDef<'src> {
     User(UserFn<'src>),
-    Native(NativeFn<'src>),
+    Native(NativeFn),
 }
 
 impl<'src> FnDef<'src> {
     pub fn call(&self, called_args: &[Value], frame: &StackFrame) -> Value {
         match self {
-            Self::User(UserFn { args, return_type, stmts }) => {
+            Self::User(UserFn { args, stmts }) => {
                 let mut new_stack_frame = StackFrame::push_stack(frame);
                 new_stack_frame.vars = called_args
                     .iter()
                     .zip(args.iter())
-                    .map(|(arg, name)| (name.0.to_string(), arg.clone()))
+                    .map(|(arg, name)| (name.to_string(), arg.clone()))
                     .collect();
                 // ここで早期リターンを止める
                 match eval_stmts(stmts, &mut new_stack_frame) {
@@ -396,7 +299,7 @@ impl<'src> FnDef<'src> {
                     },
                 }
             }
-            Self::Native(NativeFn { code, args, return_type }) => code(called_args),
+            Self::Native(NativeFn { code }) => code(called_args),
         }
     }
 }
@@ -411,13 +314,10 @@ enum BreakResult {
 }
 
 struct UserFn<'src> {
-    args: Vec<(&'src str, TypeDecl)>,
-    return_type: TypeDecl,
+    args: Vec<&'src str>,
     stmts: Statements<'src>,
 }
-struct NativeFn<'src> {
-    args: Vec<(&'src str, TypeDecl)>,
-    return_type: TypeDecl,
+struct NativeFn {
     code: Box<dyn Fn(&[Value]) -> Value>,
 }
 
@@ -491,17 +391,10 @@ fn fn_def_statement(input: &str) -> IResult<&str, Statement> {
         space_delimited(identifier),
         delimited(
             char('('),
-            separated_list0(char(','), permutation((
-                space_delimited(identifier),
-                space_delimited(char(':')),
-                space_delimited(type_def_statement),
-            ))),
+            separated_list0(char(','), space_delimited(identifier)),
             char(')'),
         ),
     ))(input)?;
-
-    let (input, _) = space_delimited(tag("->"))(input)?;
-    let (input, return_type) = space_delimited(type_def_statement)(input)?;
 
     let (input, statements) = delimited(
         space_delimited(char('{')),
@@ -514,8 +407,7 @@ fn fn_def_statement(input: &str) -> IResult<&str, Statement> {
         input,
         Statement::FnDef {
             name: fn_name,
-            args: args.into_iter().map(|(_identifier, _,_typedef)| (_identifier, _typedef)).collect(),
-            return_type: return_type,
+            args: args,
             stms: statements,
         },
     ))
@@ -525,25 +417,13 @@ fn var_def(input: &str) -> IResult<&str, Statement> {
     permutation((
         space_delimited(tag("var")),
         space_delimited(identifier),
-        space_delimited(char(':')),
-        space_delimited(type_def_statement),
         space_delimited(char('=')),
         space_delimited(expr),
     ))(input)
     .map(|(next_input, parsed)| {
         info!("var_def success, [{:#?}]", &input);
-        (next_input, Statement::VarDef(parsed.1, parsed.3,parsed.5))
+        (next_input, Statement::VarDef(parsed.1, parsed.3))
     })
-}
-
-fn type_def_statement(input: &str) -> IResult<&str, TypeDecl> {
-    let (input, type_def, ) = alt((tag("str"), tag("f64"), tag("i64")))(input)?;
-    Ok((input, match type_def {
-        "str" => TypeDecl::Str,
-        "f64" => TypeDecl::F64,
-        "i64" => TypeDecl::I64,
-        _ => panic!("Type annotation has unknown type {:?}", type_def)
-    }))
 }
 
 fn var_assign(input: &str) -> IResult<&str, Statement> {
@@ -587,7 +467,7 @@ fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>
     let mut last_value = EvalResult::Continue(Value::I64(0));
     for statement in stmts {
         match statement {
-            Statement::VarDef(identifier,_, expression) => {
+            Statement::VarDef(identifier, expression) => {
                 let value = eval(expression, stack_frame)?;
                 stack_frame.vars.insert(identifier.to_string(), value);
             }
@@ -647,12 +527,11 @@ fn eval_stmts<'src>(stmts: &Statements<'src>, stack_frame: &mut StackFrame<'src>
             Statement::Expression(expression) => {
                 last_value = EvalResult::Continue(eval(expression, stack_frame)?);
             }
-            Statement::FnDef { name, args,return_type, stms } => {
+            Statement::FnDef { name, args, stms } => {
                 stack_frame.funcs.insert(
                     name.to_string(),
                     FnDef::User(UserFn {
                         args: args.clone(),
-                        return_type: return_type.clone(),
                         stmts: stms.clone(),
                     }),
                 );
@@ -723,8 +602,6 @@ fn eval<'src>(expr: &Expression<'src>, frame: &mut StackFrame<'src>) -> EvalResu
 
 fn unary_fn<'src>(f: fn(f64) -> f64) -> FnDef<'src> {
     FnDef::Native(NativeFn {
-        args: vec![("a", TypeDecl::F64)],
-        return_type: TypeDecl::F64,
         code: Box::new(move |args| {
             let arg1 = coerce_f64(args.into_iter().next().expect("function missing arg"));
             Value::F64(f(arg1))
@@ -734,8 +611,6 @@ fn unary_fn<'src>(f: fn(f64) -> f64) -> FnDef<'src> {
 
 fn binary_fn<'src>(f: fn(f64, f64) -> f64) -> FnDef<'src> {
     FnDef::Native(NativeFn {
-        args: vec![("a", TypeDecl::F64),("b", TypeDecl::F64)],
-        return_type: TypeDecl::F64,
         code: Box::new(move |args| {
             let mut iter = args.into_iter();
             Value::F64(f(

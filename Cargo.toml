@@ -14,3 +14,7 @@ test-log = "0.2.16"
 [[bin]]
 name = "main_2"
 path = "src/main_2.rs"
+
+[[bin]]
+name = "main_4"
+path = "src/main_4.rs"
